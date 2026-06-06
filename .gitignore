@@ -3,3 +3,7 @@
 .DS_Store
 data/
 release/
+
+# 本地大包与构建产物
+*.tar.gz
+.pio/
