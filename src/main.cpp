@@ -54,6 +54,7 @@ const uint8_t PET_PAGES = 2;
 uint8_t msgScroll = 0;
 uint16_t lastLineGen = 0;
 char     lastPromptId[40] = "";
+uint16_t lastWaitingCount = 0;   // edge-detect "waiting for input" alerts
 uint32_t lastInteractMs = 0;
 bool     dimmed = false;
 bool     screenOff = false;
@@ -110,6 +111,22 @@ bool     responseSent = false;
 
 static void beep(uint16_t freq, uint16_t dur) {
   if (settings().sound) compat::beep(freq, dur);
+}
+
+// Full-screen color flash to grab attention (permission / waiting-for-input).
+// Blocking but brief (~times*160ms) — same budget as the alert beeps it pairs
+// with. Repaints from scratch afterwards so the normal HUD/pet redraws cleanly.
+static void alertFlash(uint16_t color, uint8_t times) {
+  if (screenOff) wake();
+  for (uint8_t i = 0; i < times; i++) {
+    M5.Lcd.fillScreen(color);
+    delay(80);
+    M5.Lcd.fillScreen(0x0000);
+    delay(80);
+  }
+  spr.fillSprite(0x0000);
+  characterInvalidate();
+  if (buddyMode) buddyInvalidate();
 }
 
 static void sendCmd(const char* json) {
@@ -1029,6 +1046,7 @@ void loop() {
       promptArrivedMs = millis();
       wake();
       beep(1200, 80);   // alert chirp
+      alertFlash(0xF800, 3);   // permission: red flash ×3 (most urgent)
       // Jump to the approval screen no matter what was open — drawApproval
       // only runs from drawHUD which only runs in DISP_NORMAL.
       displayMode = DISP_NORMAL;
@@ -1038,6 +1056,16 @@ void loop() {
       if (buddyMode) buddyInvalidate();
     }
   }
+
+  // Waiting-for-input arrival (non-permission): distinct alert so you know
+  // Claude needs a reply, not just an approval. Permission prompts take
+  // priority — skip if one is active to avoid double-alerting.
+  if (tama.sessionsWaiting > lastWaitingCount && !tama.promptId[0]) {
+    wake();
+    beep(900, 120); delay(90); beep(900, 120);   // double low chirp
+    alertFlash(0x001F, 2);                         // waiting: blue flash ×2
+  }
+  lastWaitingCount = tama.sessionsWaiting;
 
   bool inPrompt = tama.promptId[0] && !responseSent;
 
