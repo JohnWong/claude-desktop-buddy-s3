@@ -12,8 +12,6 @@ struct TamaState {
   bool     nudge;            // one-shot: chime when you first become awaited
   bool     awaiting;         // persistent: Claude is idle, waiting on your input
   uint32_t tokensToday;
-  uint32_t tokensWeek;       // output tokens over the last 7 days (bridge ledger)
-  uint32_t sessionTokens;    // output tokens of the current/active session
   uint32_t lastUpdated;
   char     msg[24];
   bool     connected;
@@ -110,8 +108,6 @@ static void _applyJson(const char* line, TamaState* out) {
   uint32_t bridgeTokens = doc["tokens"] | 0;
   if (doc["tokens"].is<uint32_t>()) statsOnBridgeTokens(bridgeTokens);
   out->tokensToday = doc["tokens_today"] | out->tokensToday;
-  out->tokensWeek    = doc["tokens_week"]    | out->tokensWeek;
-  out->sessionTokens = doc["session_tokens"] | out->sessionTokens;
   const char* m = doc["msg"];
   if (m) { strncpy(out->msg, m, sizeof(out->msg)-1); out->msg[sizeof(out->msg)-1]=0; }
   JsonArray la = doc["entries"];

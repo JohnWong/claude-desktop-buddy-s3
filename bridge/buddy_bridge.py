@@ -70,7 +70,11 @@ def _today() -> str:
 def ledger_load():
     try:
         with open(TOKENS_FILE) as f:
-            LEDGER.update({k: int(v) for k, v in json.load(f).items()})
+            d = json.load(f)
+        LEDGER.update({k: int(v) for k, v in (d.get("days") or {}).items()})
+        # Persisting per-session last-counted survives bridge restarts so
+        # "today" doesn't reset (the dev pain we hit kickstarting the bridge).
+        LEDGER_LAST.update({k: int(v) for k, v in (d.get("last") or {}).items()})
     except Exception:
         pass
 
@@ -79,7 +83,7 @@ def ledger_save():
     try:
         os.makedirs(SOCK_DIR, exist_ok=True)
         with open(TOKENS_FILE, "w") as f:
-            json.dump(LEDGER, f)
+            json.dump({"days": LEDGER, "last": LEDGER_LAST}, f)
     except Exception:
         pass
 
@@ -89,23 +93,17 @@ def ledger_add(sid: str, cumulative: int):
     prev = LEDGER_LAST.get(sid)
     LEDGER_LAST[sid] = cumulative
     if prev is None or cumulative < prev:
-        return                       # first sight or transcript reset → no add
+        ledger_save()                # persist the latch so a restart resumes it
+        return
     delta = cumulative - prev
     if delta <= 0:
         return
-    d = _today()
-    LEDGER[d] = LEDGER.get(d, 0) + delta
+    LEDGER[_today()] = LEDGER.get(_today(), 0) + delta
     ledger_save()
 
 
-def tokens_today_week():
-    today = LEDGER.get(_today(), 0)
-    week = 0
-    now = time.time()
-    for i in range(7):
-        day = time.strftime("%Y-%m-%d", time.localtime(now - i * 86400))
-        week += LEDGER.get(day, 0)
-    return today, week
+def tokens_today() -> int:
+    return LEDGER.get(_today(), 0)
 
 # One-shot flags merged into the very next device frame, then cleared:
 #   completed → confetti celebrate (a turn just finished)
@@ -182,20 +180,9 @@ def aggregate() -> dict:
     tokens = sum(SESSION_TOKENS.get(sid, 0) for sid in SESSIONS)
     awaiting = (running == 0 and not PENDING
                 and any(s.get("awaiting") for s in SESSIONS.values()))
-    # "current session" = the running one, else the most-recently-seen session.
-    cur = None
-    for sid, s in SESSIONS.items():
-        if s["state"] == "running":
-            cur = sid
-            break
-    if cur is None and SESSIONS:
-        cur = max(SESSIONS, key=lambda k: SESSIONS[k]["seen"])
-    session_tokens = SESSION_TOKENS.get(cur, 0) if cur else 0
-    today, week = tokens_today_week()
     frame = {"total": total, "running": running, "waiting": waiting,
              "msg": msg, "tokens": tokens, "awaiting": awaiting,
-             "session_tokens": session_tokens,
-             "tokens_today": today, "tokens_week": week}
+             "tokens_today": tokens_today()}
     if PENDING:
         # Surface the oldest pending approval as the device's prompt screen.
         pid = next(iter(PENDING))

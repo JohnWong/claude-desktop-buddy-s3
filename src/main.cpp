@@ -907,10 +907,8 @@ static void drawPetStats(const Palette& p) {
     else if (v >= 1000) spr.printf("%s%lu.%luK", label, v/1000, (v/100)%10);
     else                spr.printf("%s%lu", label, v);
   };
-  tokFmt("session  ", tama.sessionTokens, y + 30);
-  tokFmt("today    ", tama.tokensToday,   y + 40);
-  tokFmt("week     ", tama.tokensWeek,    y + 50);
-  tokFmt("total    ", stats().tokens,     y + 60);
+  tokFmt("tokens   ", stats().tokens, y + 30);
+  tokFmt("today    ", tama.tokensToday, y + 40);
 }
 
 static void drawPetHowTo(const Palette& p) {
