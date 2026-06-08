@@ -129,6 +129,18 @@ static void alertFlash(uint16_t color, uint8_t times) {
   if (buddyMode) buddyInvalidate();
 }
 
+// Persistent, calm signal that Claude is idle waiting for your input. A slow
+// amber breathing border (~2.4s cycle) — visible from across the room but not
+// alarming like the red permission pulse. Drawn into the sprite each frame.
+static void drawAwaitingBorder() {
+  uint32_t ph = millis() % 2400;
+  uint32_t tri = ph < 1200 ? ph : 2400 - ph;          // 0..1200..0
+  int b = 50 + (int)(tri * (255 - 50) / 1200);         // breathe 50..255
+  uint16_t col = ((b & 0xF8) << 8) | (((b * 60 / 100) & 0xFC) << 3);  // amber
+  spr.drawRect(0, 0, W, H, col);
+  spr.drawRect(1, 1, W - 2, H - 2, col);
+}
+
 static void sendCmd(const char* json) {
   Serial.println(json);
   size_t n = strlen(json);
@@ -1069,8 +1081,9 @@ void loop() {
   // permission prompt. Skipped while an approval is up (that takes priority).
   if (tama.nudge && !lastNudge && !tama.promptId[0]) {
     wake();
-    beep(700, 150);            // single soft low chime
-    alertFlash(0xFD20, 1);     // amber flash ×1 (calm)
+    beep(700, 150);            // single soft low chime; the persistent amber
+                               // breathing border (drawAwaitingBorder) carries
+                               // the ongoing visual signal.
   }
   lastNudge = tama.nudge;
 
@@ -1273,6 +1286,11 @@ void loop() {
     if (resetOpen) drawReset();
     else if (settingsOpen) drawSettings();
     else if (menuOpen) drawMenu();
+    // Awaiting-your-input: calm amber breathing border (no physical LED on S3).
+    if (tama.awaiting && !tama.promptId[0] && settings().led
+        && !menuOpen && !settingsOpen && !resetOpen) {
+      drawAwaitingBorder();
+    }
     spr.pushSprite(0, 0);
   }
 

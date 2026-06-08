@@ -9,7 +9,8 @@ struct TamaState {
   uint8_t  sessionsRunning;
   uint8_t  sessionsWaiting;
   bool     recentlyCompleted;
-  bool     nudge;            // one-shot: "Claude is idle, awaiting your input"
+  bool     nudge;            // one-shot: chime when you first become awaited
+  bool     awaiting;         // persistent: Claude is idle, waiting on your input
   uint32_t tokensToday;
   uint32_t lastUpdated;
   char     msg[24];
@@ -98,6 +99,7 @@ static void _applyJson(const char* line, TamaState* out) {
   out->sessionsWaiting   = doc["waiting"]   | out->sessionsWaiting;
   out->recentlyCompleted = doc["completed"] | false;
   out->nudge             = doc["nudge"] | false;
+  out->awaiting          = doc["awaiting"] | false;
   uint32_t bridgeTokens = doc["tokens"] | 0;
   if (doc["tokens"].is<uint32_t>()) statsOnBridgeTokens(bridgeTokens);
   out->tokensToday = doc["tokens_today"] | out->tokensToday;

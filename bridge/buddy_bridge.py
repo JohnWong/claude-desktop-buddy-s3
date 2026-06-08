@@ -63,7 +63,7 @@ def now() -> float:
 def touch(sid: str) -> dict:
     s = SESSIONS.get(sid)
     if s is None:
-        s = {"state": "idle", "label": "", "seen": now()}
+        s = {"state": "idle", "label": "", "seen": now(), "awaiting": False}
         SESSIONS[sid] = s
     s["seen"] = now()
     return s
@@ -90,16 +90,19 @@ def apply_event(ev: dict):
         SESSION_TOKENS[sid] = int(ev["tokens"])
     if evt == "start":
         s["state"] = "idle"
+        s["awaiting"] = False
     elif evt == "run":
         s["state"] = "running"           # whole turn counts as busy (our redefine)
+        s["awaiting"] = False            # you replied → clear the awaiting border
     elif evt == "idle":
-        s["state"] = "idle"              # turn ended → awaiting your input
+        s["state"] = "idle"              # turn ended (border waits for idle_prompt)
         ONESHOT["completed"] = True      # brief celebrate, like the desktop app
     elif evt == "notify":
         nt = ev.get("ntype", "")
         if nt == "idle_prompt":
             s["state"] = "idle"
-            ONESHOT["nudge"] = True      # gentle "awaiting your input" reminder
+            s["awaiting"] = True         # persistent: drives the amber border
+            ONESHOT["nudge"] = True      # one-shot chime the moment it starts
         # permission_prompt handled in M3 (waiting + prompt relay)
 
 
@@ -119,8 +122,10 @@ def aggregate() -> dict:
     else:
         msg = "awaiting you"
     tokens = sum(SESSION_TOKENS.get(sid, 0) for sid in SESSIONS)
+    awaiting = (running == 0 and not PENDING
+                and any(s.get("awaiting") for s in SESSIONS.values()))
     frame = {"total": total, "running": running, "waiting": waiting,
-             "msg": msg, "tokens": tokens}
+             "msg": msg, "tokens": tokens, "awaiting": awaiting}
     if PENDING:
         # Surface the oldest pending approval as the device's prompt screen.
         pid = next(iter(PENDING))
