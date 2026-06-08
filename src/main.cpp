@@ -1098,6 +1098,7 @@ void setup() {
   auto cfg = M5.config();
   M5.begin(cfg);
   M5.Display.setRotation(0);
+  M5.Display.fillScreen(0);   // wipe any stale image left in LCD RAM across reset
   M5.Speaker.begin();
   M5.Speaker.setVolume(160);
   startBt();
