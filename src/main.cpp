@@ -467,6 +467,12 @@ static void drawClock() {
     spr.setTextSize(4); spr.setTextColor(p.text, p.bg);    spr.drawString(hm, CX, 140);
     spr.setTextSize(2); spr.setTextColor(p.textDim, p.bg); spr.drawString(ss, CX, 175);
     spr.setTextSize(1);                                     spr.drawString(dl, CX, 200);
+    if (tama.usageS5 >= 0) {
+      char ul[24];
+      if (tama.usageW7 >= 0) snprintf(ul, sizeof(ul), "5h %d%%  7d %d%%", tama.usageS5, tama.usageW7);
+      else                   snprintf(ul, sizeof(ul), "5h %d%%", tama.usageS5);
+      spr.setTextColor(p.body, p.bg); spr.drawString(ul, CX, 220);
+    }
     spr.setTextDatum(TL_DATUM);
     return;
   }
@@ -489,8 +495,14 @@ static void drawClock() {
     M5.Lcd.setTextSize(3); M5.Lcd.setTextColor(p.text, p.bg);    M5.Lcd.drawString(hm, 170, 42);
     M5.Lcd.setTextSize(2); M5.Lcd.setTextColor(p.textDim, p.bg); M5.Lcd.drawString(ssl, 170, 72);
                                                                   M5.Lcd.drawString(wdl, 170, 102);
-    M5.Lcd.setTextDatum(TL_DATUM);
     M5.Lcd.setTextSize(1);
+    if (tama.usageS5 >= 0) {
+      char ul[24];
+      if (tama.usageW7 >= 0) snprintf(ul, sizeof(ul), "5h %d%%  7d %d%%", tama.usageS5, tama.usageW7);
+      else                   snprintf(ul, sizeof(ul), "5h %d%%", tama.usageS5);
+      M5.Lcd.setTextColor(p.body, p.bg); M5.Lcd.drawString(ul, 170, 122);
+    }
+    M5.Lcd.setTextDatum(TL_DATUM);
   }
 
   // Pet on left at 5 fps. Clear includes the overlay-particle zone above
