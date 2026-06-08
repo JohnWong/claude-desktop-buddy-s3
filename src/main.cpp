@@ -408,35 +408,40 @@ static void clockUpdateOrient() {
   compat::getAccel(&ax, &ay, &az);
   uint8_t lock = settings().clockRot;
   if (lock == 1) { clockOrient = 0; return; }
+  // This StickS3's IMU is mounted 90° from the original code's assumption:
+  // portrait-upright (USB down) reads ax≈-1, ay≈0; landscape reads ay≈±1,
+  // ax≈0. So gate landscape on |ay| (not |ax|), and map the sign:
+  //   ay>0 = USB to the right → rotation 1
+  //   ay<0 = USB to the left  → rotation 3
   if (lock == 2) {
     // Locked landscape: never drop to 0, but still pick 1 vs 3 from
     // gravity so the cradle works either way up. Need a strong tilt
     // for the 1↔3 swap so handling jitter doesn't flip it; otherwise
-    // hold whatever we last had (or 1 from boot).
-    if (clockOrient == 0) clockOrient = (ax >= 0) ? 1 : 3;
-    if      (ax >  0.5f && clockOrient != 1) clockOrient = 1;
-    else if (ax < -0.5f && clockOrient != 3) clockOrient = 3;
+    // hold whatever we last had.
+    if (clockOrient == 0) clockOrient = (ay >= 0) ? 1 : 3;
+    if      (ay >  0.5f && clockOrient != 1) clockOrient = 1;
+    else if (ay < -0.5f && clockOrient != 3) clockOrient = 3;
     return;
   }
   // Dual threshold: strict to enter (must be clearly sideways), loose to
   // stay (tolerate ~65° of tilt). With one shared threshold a slight lean
-  // while sitting on the long edge puts ax right at the boundary and the
+  // while sitting on the long edge puts ay right at the boundary and the
   // counter ratchets down in ~half a second.
   bool side = (clockOrient == 0)
-    ? fabsf(ax) > 0.7f && fabsf(ay) < 0.5f && fabsf(az) < 0.5f
-    : fabsf(ax) > 0.4f;
+    ? fabsf(ay) > 0.7f && fabsf(ax) < 0.5f && fabsf(az) < 0.5f
+    : fabsf(ay) > 0.4f;
   if (side) { if (orientFrames < 20) orientFrames++; }
   else      { if (orientFrames > -10) orientFrames--; }
+  uint8_t want = (ay > 0) ? 1 : 3;
   if (clockOrient == 0 && orientFrames >= 15) {
-    clockOrient = (ax > 0) ? 1 : 3;
+    clockOrient = want;
   } else if (clockOrient != 0 && orientFrames <= -8) {
     clockOrient = 0;
   } else if (clockOrient != 0 && side) {
-    // Direct 1↔3: a fast flip keeps |ax|>0.7 (just changes sign), so
+    // Direct 1↔3: a fast flip keeps |ay|>0.7 (just changes sign), so
     // `side` never drops and the exit-via-0 path can't fire. Watch for
-    // ax sign disagreeing with the stored orientation.
+    // ay sign disagreeing with the stored orientation.
     static int8_t swapFrames = 0;
-    uint8_t want = (ax > 0) ? 1 : 3;
     if (want != clockOrient) { if (++swapFrames >= 8) { clockOrient = want; swapFrames = 0; } }
     else swapFrames = 0;
   }
