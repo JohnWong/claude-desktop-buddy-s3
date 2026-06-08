@@ -4,6 +4,10 @@
 data/
 release/
 
-# 本地大包与构建产物
+# Local big downloads / build artifacts
 *.tar.gz
-.pio/
+
+# Python (bridge)
+__pycache__/
+*.pyc
+.venv/
