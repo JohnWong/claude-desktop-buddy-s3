@@ -178,6 +178,9 @@ def aggregate() -> dict:
     else:
         msg = "awaiting you"
     tokens = sum(SESSION_TOKENS.get(sid, 0) for sid in SESSIONS)
+    # Amber border only when you're truly free — ALL sessions idle (running==0).
+    # A single session going idle while others run just gets the one-shot chime,
+    # not the persistent border (kept lightweight on purpose).
     awaiting = (running == 0 and not PENDING
                 and any(s.get("awaiting") for s in SESSIONS.values()))
     frame = {"total": total, "running": running, "waiting": waiting,
@@ -192,7 +195,8 @@ def aggregate() -> dict:
     if ASK:
         aid = next(iter(ASK))
         a = ASK[aid]
-        frame["ask"] = {"id": aid, "header": a["header"], "opts": a["opts"]}
+        frame["ask"] = {"id": aid, "header": a["header"],
+                        "proj": a.get("proj", ""), "opts": a["opts"]}
         frame["msg"] = "question"
     return frame
 
@@ -225,6 +229,7 @@ async def handle_conn(reader: asyncio.StreamReader, writer: asyncio.StreamWriter
                     opts = [str(o)[:21] for o in (ev.get("opts") or [])][:4]
                     ASK[aid] = {"writer": writer,
                                 "header": str(ev.get("header", ""))[:21],
+                                "proj": str(ev.get("proj", ""))[:21],
                                 "opts": opts}
                     owned.add(aid)
                     print(f"[ask] id={aid} opts={opts} -> awaiting device",

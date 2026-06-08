@@ -63,7 +63,7 @@ def count_output_tokens(path: str) -> int:
     return total
 
 
-def ask_device(sid: str, qid: str, header: str, options: list):
+def ask_device(sid: str, qid: str, header: str, options: list, proj: str = ""):
     """Relay a multiple-choice question to the device. Returns the chosen option
     index, or None to fall back to the native terminal picker (escape / timeout /
     no bridge)."""
@@ -71,7 +71,7 @@ def ask_device(sid: str, qid: str, header: str, options: list):
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         s.settimeout(ASK_WAIT)
         s.connect(SOCK_PATH)
-        s.sendall((json.dumps({"evt": "ask", "sid": sid, "id": qid,
+        s.sendall((json.dumps({"evt": "ask", "sid": sid, "id": qid, "proj": proj,
                                "header": header, "opts": options}) + "\n").encode())
         buf = b""
         while b"\n" not in buf:
@@ -94,6 +94,7 @@ def handle_ask(data: dict):
     ti = data.get("tool_input", {}) or {}
     questions = ti.get("questions") or []
     sid = data.get("session_id", "")
+    proj = os.path.basename(data.get("cwd", "") or "")   # which project is asking
     answers = {}
     for i, q in enumerate(questions):
         opts = [o.get("label", "") for o in (q.get("options") or []) if o.get("label")]
@@ -101,7 +102,7 @@ def handle_ask(data: dict):
             return                      # v1: single-select only → native picker
         header = (q.get("header") or q.get("question", ""))[:21]
         qid = f"{sid[:8]}-a{i}-{int(time.time() * 1000) % 100000}"
-        idx = ask_device(sid, qid, header, opts[:4])
+        idx = ask_device(sid, qid, header, opts[:4], proj)
         if idx is None or not (0 <= idx < len(opts)):
             return                      # escape/timeout → native picker
         answers[q.get("question", "")] = opts[idx]

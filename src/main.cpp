@@ -817,30 +817,35 @@ static void drawApproval() {
 static void drawAsk() {
   const Palette& p = characterPalette();
   spr.fillSprite(p.bg);
+  // efontCN renders Chinese (and ASCII); option labels/headers are often CJK.
+  spr.setFont(&fonts::efontCN_16);
   spr.setTextSize(1);
+  // Top line: which project is asking (so you know where to go answer).
   spr.setTextColor(p.body, p.bg);
-  spr.setCursor(4, 6);
-  spr.print("Claude asks:");
+  spr.setCursor(4, 4);
+  if (tama.askProj[0]) spr.printf("[%s] asks", tama.askProj);
+  else                 spr.print("Claude asks");
   spr.setTextColor(p.text, p.bg);
-  spr.setCursor(4, 18);
-  spr.printf("%.21s", tama.askHeader);
+  spr.setCursor(4, 22);
+  spr.print(tama.askHeader);
 
-  int y = 38;
+  int y = 44;
   uint8_t rows = tama.askCount + 1;          // + the terminal escape row
   for (uint8_t i = 0; i < rows; i++) {
     bool sel = (i == askSel);
     bool esc = (i == tama.askCount);
-    if (sel) spr.fillRoundRect(2, y - 2, W - 4, 16, 3, p.body);
+    if (sel) spr.fillRoundRect(2, y - 2, W - 4, 18, 3, p.body);
     spr.setTextColor(sel ? p.bg : (esc ? p.textDim : p.text), sel ? p.body : p.bg);
-    spr.setCursor(8, y + 2);
-    if (esc) spr.print("> terminal / type");
-    else     spr.printf("%.20s", tama.askOpts[i]);
-    y += 18;
+    spr.setCursor(8, y + 1);
+    if (esc) spr.print("← terminal / type");
+    else     spr.print(tama.askOpts[i]);
+    y += 19;
   }
 
   spr.setTextColor(p.textDim, p.bg);
-  spr.setCursor(4, H - 12);
+  spr.setCursor(4, H - 14);
   spr.print("B: move   A: pick");
+  spr.setFont(&fonts::Font0);                // restore default for other screens
 }
 
 static void tinyHeart(int x, int y, bool filled, uint16_t col) {

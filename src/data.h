@@ -24,6 +24,7 @@ struct TamaState {
   // AskUserQuestion relay: a multiple-choice question to answer on-device.
   char     askId[40];        // empty = no question pending
   char     askHeader[22];    // short question label
+  char     askProj[22];      // project (cwd basename) so you know which session
   char     askOpts[4][22];   // up to 4 option labels
   uint8_t  askCount;         // number of options (0..4)
 };
@@ -135,9 +136,10 @@ static void _applyJson(const char* line, TamaState* out) {
   }
   JsonObject ask = doc["ask"];
   if (!ask.isNull()) {
-    const char* aid = ask["id"]; const char* ah = ask["header"];
+    const char* aid = ask["id"]; const char* ah = ask["header"]; const char* ap = ask["proj"];
     strncpy(out->askId,     aid ? aid : "", sizeof(out->askId)-1);     out->askId[sizeof(out->askId)-1]=0;
     strncpy(out->askHeader, ah  ? ah  : "", sizeof(out->askHeader)-1); out->askHeader[sizeof(out->askHeader)-1]=0;
+    strncpy(out->askProj,   ap  ? ap  : "", sizeof(out->askProj)-1);   out->askProj[sizeof(out->askProj)-1]=0;
     JsonArray opts = ask["opts"];
     uint8_t n = 0;
     if (!opts.isNull()) for (JsonVariant v : opts) {
