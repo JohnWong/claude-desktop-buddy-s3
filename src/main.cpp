@@ -46,7 +46,7 @@ uint8_t menuSel     = 0;
 uint8_t brightLevel = 4;           // 0..4 → ScreenBreath 20..100
 bool    btnALong    = false;
 
-enum DisplayMode { DISP_NORMAL, DISP_USAGE, DISP_PET, DISP_INFO, DISP_COUNT };
+enum DisplayMode { DISP_NORMAL, DISP_PET, DISP_INFO, DISP_COUNT };
 uint8_t displayMode = DISP_NORMAL;
 uint8_t infoPage = 0;
 uint8_t petPage = 0;
@@ -150,9 +150,12 @@ static void sendCmd(const char* json) {
   bleWrite((const uint8_t*)json, n);
   bleWrite((const uint8_t*)"\n", 1);
 }
-const uint8_t INFO_PAGES = 6;
-const uint8_t INFO_PG_BUTTONS = 1;
-const uint8_t INFO_PG_CREDITS = 5;
+const uint8_t INFO_PAGES = 7;
+// Display order → original section id (6 = USAGE). USAGE first; the old help
+// pages (ABOUT=0, BUTTONS=1) moved to the end.
+const uint8_t INFO_ORDER[INFO_PAGES] = { 6, 2, 3, 4, 5, 0, 1 };
+const uint8_t INFO_PG_BUTTONS = 6;
+const uint8_t INFO_PG_CREDITS = 4;
 
 void applyDisplayMode() {
   bool peek = displayMode != DISP_NORMAL;
@@ -561,6 +564,8 @@ void drawPasskey() {
   spr.print(b);
 }
 
+static void drawUsageInfo(const Palette& p, int& y);   // defined below
+
 void drawInfo() {
   const Palette& p = characterPalette();
   const int TOP = 70;
@@ -572,7 +577,13 @@ void drawInfo() {
     spr.setCursor(4, y); spr.print(b); y += 8;
   };
 
-  if (infoPage == 0) {
+  uint8_t sec = INFO_ORDER[infoPage < INFO_PAGES ? infoPage : 0];
+
+  if (sec == 6) {
+    _infoHeader(p, y, "USAGE", infoPage);
+    drawUsageInfo(p, y);
+
+  } else if (sec == 0) {
     _infoHeader(p, y, "ABOUT", infoPage);
     spr.setTextColor(p.textDim, p.bg);
     ln("I watch your Claude");
@@ -592,7 +603,7 @@ void drawInfo() {
     ln("18 species. Settings");
     ln("> ascii pet to cycle.");
 
-  } else if (infoPage == 1) {
+  } else if (sec == 1) {
     _infoHeader(p, y, "BUTTONS", infoPage);
     spr.setTextColor(p.text, p.bg);    ln("A   front");
     spr.setTextColor(p.textDim, p.bg); ln("    next screen");
@@ -606,7 +617,7 @@ void drawInfo() {
     spr.setTextColor(p.textDim, p.bg); ln("    tap = screen off");
     ln("    hold 6s = off");
 
-  } else if (infoPage == 2) {
+  } else if (sec == 2) {
     _infoHeader(p, y, "CLAUDE", infoPage);
     spr.setTextColor(p.textDim, p.bg);
     ln("  sessions  %u", tama.sessionsTotal);
@@ -622,7 +633,7 @@ void drawInfo() {
     ln("  last msg  %lus", (unsigned long)age);
     ln("  state     %s", stateNames[activeState]);
 
-  } else if (infoPage == 3) {
+  } else if (sec == 3) {
     _infoHeader(p, y, "DEVICE", infoPage);
 
     int vBat_mV = (int)(compat::batVoltageV() * 1000);
@@ -661,7 +672,7 @@ void drawInfo() {
     ln("  bt       %s", settings().bt ? (dataBtActive() ? "linked" : "on") : "off");
     ln("  temp     %dC", compat::chipTempC());
 
-  } else if (infoPage == 4) {
+  } else if (sec == 4) {
     _infoHeader(p, y, "BLUETOOTH", infoPage);
     bool linked = settings().bt && dataBtActive();
 
@@ -878,52 +889,46 @@ static void usageBar(const Palette& p, int x, int y, int w, int pct) {
   }
 }
 
-// Dedicated /usage screen: session 5h and weekly 7d limits, as bars + reset.
-static void drawUsage() {
-  const Palette& p = characterPalette();
-  spr.fillSprite(p.bg);
-  spr.setFont(&fonts::Font0);
-  spr.setTextSize(1);
-  spr.setTextColor(p.body, p.bg);
-  spr.setCursor(4, 6); spr.print("USAGE");
+// Usage rendered as the first Info page (bars + reset), starting at cursor y.
+static void drawUsageInfo(const Palette& p, int& y) {
   char buf[16];
-
   struct { const char* lbl; int pct; long in; } rows[2] = {
     {"session 5h", tama.usageS5, tama.usageS5In},
     {"week 7d",    tama.usageW7, tama.usageW7In},
   };
-  int y = 30;
   for (int i = 0; i < 2; i++) {
     spr.setTextColor(p.text, p.bg);
     spr.setCursor(4, y); spr.print(rows[i].lbl);
     spr.setCursor(W - 34, y);
     if (rows[i].pct >= 0) spr.printf("%d%%", rows[i].pct); else spr.print("--");
-    usageBar(p, 4, y + 12, W - 8, rows[i].pct);
+    usageBar(p, 4, y + 11, W - 8, rows[i].pct);
     fmtDur(rows[i].in, buf, sizeof(buf));
     spr.setTextColor(p.textDim, p.bg);
-    spr.setCursor(4, y + 28); spr.printf("resets in %s", buf);
-    y += 52;
+    spr.setCursor(4, y + 26); spr.printf("resets %s", buf);
+    y += 46;
   }
   if (tama.usageS5 < 0 && tama.usageW7 < 0) {
     spr.setTextColor(p.textDim, p.bg);
-    spr.setCursor(4, H - 16); spr.print("waiting for statusline");
+    spr.setCursor(4, y); spr.print("waiting for statusline");
   }
 }
 
-// Compact one-liner for the home screen corner.
+// Compact home-screen line at the BOTTOM: 5h % + reset countdown.
 static void drawUsageCorner() {
   if (tama.usageS5 < 0 && tama.usageW7 < 0) return;
   const Palette& p = characterPalette();
   spr.setFont(&fonts::Font0);
   spr.setTextSize(1);
   spr.setTextColor(p.textDim, p.bg);
-  spr.setCursor(2, 1);
-  if (tama.usageS5 >= 0 && tama.usageW7 >= 0)
-    spr.printf("5h %d%%  7d %d%%", tama.usageS5, tama.usageW7);
-  else if (tama.usageS5 >= 0)
-    spr.printf("5h %d%%", tama.usageS5);
-  else
-    spr.printf("7d %d%%", tama.usageW7);
+  char buf[24], r[12];
+  if (tama.usageS5 >= 0) {
+    fmtDur(tama.usageS5In, r, sizeof(r));
+    snprintf(buf, sizeof(buf), "5h %d%%  resets %s", tama.usageS5, r);
+  } else {
+    snprintf(buf, sizeof(buf), "7d %d%%", tama.usageW7);
+  }
+  spr.setCursor(2, H - 9);
+  spr.print(buf);
 }
 
 static void drawPetStats(const Palette& p) {
@@ -1427,7 +1432,6 @@ void loop() {
     if (blePasskey()) drawPasskey();
     else if (tama.askId[0] && !askResponseSent) drawAsk();
     else if (clocking) drawClock();
-    else if (displayMode == DISP_USAGE) drawUsage();
     else if (displayMode == DISP_INFO) drawInfo();
     else if (displayMode == DISP_PET) drawPet();
     else if (settings().hud) { drawHUD(); drawUsageCorner(); }
