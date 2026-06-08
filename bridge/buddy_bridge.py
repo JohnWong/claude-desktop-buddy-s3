@@ -41,6 +41,11 @@ SESSION_TTL   = 3600    # drop sessions with no events for this long (safety)
 # session_id -> {"state": "idle"|"running"|"waiting", "label": str, "seen": ts}
 SESSIONS: dict[str, dict] = {}
 
+# Pending permission requests: id -> {"writer", "tool", "hint"}. A hook connection
+# stays open while its prompt is pending; the device's A/B decision (or the hook
+# closing — keyboard answered / timeout) resolves it.
+PENDING: dict[str, dict] = {}
+
 
 def now() -> float:
     return time.monotonic()
@@ -89,7 +94,7 @@ def aggregate() -> dict:
     prune()
     total   = len(SESSIONS)
     running = sum(1 for s in SESSIONS.values() if s["state"] == "running")
-    waiting = sum(1 for s in SESSIONS.values() if s["state"] == "waiting")
+    waiting = len(PENDING)   # firmware 'waiting' = blocked on a permission prompt
     if total == 0:
         msg = "no sessions"
     elif running:
@@ -99,11 +104,19 @@ def aggregate() -> dict:
         msg = f"working: {lbl}" if lbl else f"{running} working"
     else:
         msg = "awaiting you"
-    return {"total": total, "running": running, "waiting": waiting, "msg": msg}
+    frame = {"total": total, "running": running, "waiting": waiting, "msg": msg}
+    if PENDING:
+        # Surface the oldest pending approval as the device's prompt screen.
+        pid = next(iter(PENDING))
+        p = PENDING[pid]
+        frame["prompt"] = {"id": pid, "tool": p["tool"], "hint": p["hint"]}
+        frame["msg"] = f"approve? {p['tool']}"
+    return frame
 
 
 # ── Socket server (hooks → bridge) ───────────────────────────────────────────
 async def handle_conn(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+    owned: set[str] = set()   # prompt ids this connection is waiting on
     try:
         async for raw in reader:
             line = raw.decode("utf-8", "replace").strip()
@@ -113,13 +126,32 @@ async def handle_conn(reader: asyncio.StreamReader, writer: asyncio.StreamWriter
                 ev = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            apply_event(ev)
-            print(f"[sock] {ev.get('evt')} sid={ev.get('sid')} -> {aggregate()}",
-                  flush=True)
+            if ev.get("evt") == "prompt":
+                pid = str(ev.get("id") or "")
+                if pid:
+                    PENDING[pid] = {"writer": writer,
+                                    "tool": str(ev.get("tool", ""))[:18],
+                                    "hint": str(ev.get("hint", ""))[:42]}
+                    owned.add(pid)
+                    print(f"[prompt] {ev.get('tool')} id={pid} -> awaiting device",
+                          flush=True)
+                # keep the connection OPEN; resolved by on_tx or by EOF below
+            else:
+                apply_event(ev)
+                print(f"[sock] {ev.get('evt')} sid={ev.get('sid')} -> {aggregate()}",
+                      flush=True)
     except Exception:
         pass
     finally:
-        writer.close()
+        # Hook closed before the device answered → keyboard answered or timed
+        # out. Cancel any still-pending prompt so the device clears its screen.
+        for pid in owned:
+            if PENDING.pop(pid, None) is not None:
+                print(f"[prompt] id={pid} cancelled (hook closed)", flush=True)
+        try:
+            writer.close()
+        except Exception:
+            pass
 
 
 async def socket_server():
@@ -135,10 +167,29 @@ async def socket_server():
 
 # ── BLE push loop (bridge → device) ──────────────────────────────────────────
 def on_tx(_char, data: bytearray):
-    # Device → host (button decisions, etc.) — used in M3.
+    # Device → host. The buddy notifies a permission decision when you press
+    # A (approve) or B (deny) on the approval screen.
     line = data.decode("utf-8", "replace").strip()
-    if line:
-        print(f"[ble] <- {line}")
+    if not line:
+        return
+    print(f"[ble] <- {line}", flush=True)
+    try:
+        obj = json.loads(line)
+    except json.JSONDecodeError:
+        return
+    if obj.get("cmd") == "permission":
+        pid = str(obj.get("id") or "")
+        decision = obj.get("decision")           # "once" (approve) | "deny"
+        p = PENDING.pop(pid, None)
+        if p is None:
+            return
+        reply = "allow" if decision == "once" else "deny"
+        try:
+            p["writer"].write((json.dumps({"decision": reply}) + "\n").encode())
+            p["writer"].close()                  # unblocks the waiting hook
+            print(f"[prompt] id={pid} -> {reply} (from device)", flush=True)
+        except Exception as e:
+            print(f"[prompt] reply failed: {e}", flush=True)
 
 
 async def find_dev():

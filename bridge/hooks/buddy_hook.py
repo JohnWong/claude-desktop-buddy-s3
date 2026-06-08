@@ -20,8 +20,13 @@ import json
 import os
 import socket
 import sys
+import time
 
 SOCK_PATH = os.path.expanduser("~/.claude-buddy/bridge.sock")
+
+# Wait at most this long for a device decision before falling back to the native
+# interactive prompt. Must be < the hook's timeout in settings.json.
+PERMISSION_WAIT = 40.0
 
 
 def post(obj: dict):
@@ -33,6 +38,40 @@ def post(obj: dict):
         s.close()
     except Exception:
         pass  # fail-open: bridge down → no-op
+
+
+def summarize(tool: str, ti) -> str:
+    """A short, non-sensitive detail for the device (cmd / path / url)."""
+    if isinstance(ti, dict):
+        for k in ("command", "file_path", "path", "url", "pattern", "query"):
+            v = ti.get(k)
+            if v:
+                return str(v).replace("\n", " ")[:42]
+    return tool[:42]
+
+
+def request_decision(sid: str, tool: str, hint: str):
+    """Relay a permission prompt to the device and wait for A/B. Returns
+    "allow" | "deny", or None to fall back to the native interactive prompt
+    (device timed out, was unplugged, or the bridge is down)."""
+    pid = f"{(sid or '')[:8]}-{int(time.time() * 1000) % 1000000}"
+    try:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(PERMISSION_WAIT)
+        s.connect(SOCK_PATH)
+        s.sendall((json.dumps({"evt": "prompt", "sid": sid, "id": pid,
+                               "tool": tool, "hint": hint}) + "\n").encode())
+        buf = b""
+        while b"\n" not in buf:
+            chunk = s.recv(256)
+            if not chunk:           # bridge closed w/o a decision → fall back
+                return None
+            buf += chunk
+        s.close()
+        obj = json.loads(buf.split(b"\n", 1)[0].decode())
+        return obj.get("decision")
+    except Exception:
+        return None                 # timeout / no bridge → native prompt wins
 
 
 def main():
@@ -57,6 +96,17 @@ def main():
               "ntype": data.get("notification_type", "")})
     elif event == "SessionEnd":
         post({"evt": "end", "sid": sid})
+    elif event == "PermissionRequest":
+        tool = data.get("tool_name", "")
+        hint = summarize(tool, data.get("tool_input", {}))
+        decision = request_decision(sid, tool, hint)
+        if decision in ("allow", "deny"):
+            print(json.dumps({"hookSpecificOutput": {
+                "hookEventName": "PermissionRequest",
+                "decision": {"behavior": decision},
+            }}))
+        # else: no stdout → Claude Code falls back to the native prompt
+        sys.exit(0)
 
     sys.exit(0)  # never block Claude Code
 

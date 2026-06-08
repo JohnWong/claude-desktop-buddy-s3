@@ -22,28 +22,49 @@ claude CLI ──hooks──► buddy_hook.py ──unix socket──► buddy_b
 | Stop | idle (turn ended, awaiting you) |
 | Notification(idle_prompt) | idle/awaiting |
 | SessionEnd | removed (total −1) |
+| **PermissionRequest** (M3) | relays prompt to device; **A=approve, B=deny**; `waiting` = pending approvals |
 
-`waiting` and permission round-trip arrive in **M3**.
+## Permissions (M3)
+`PermissionRequest` fires only when a tool actually needs approval. The hook
+relays `{tool, hint}` to the bridge and blocks; the device shows the approval
+screen (red flash + beep). Press **A** to approve / **B** to deny — the bridge
+returns the decision to Claude Code as
+`hookSpecificOutput.decision.behavior = "allow"|"deny"`.
+
+**Dual-path / fail-open:** if you answer at the keyboard instead, or the device
+times out / is unplugged / the bridge is down, the hook closes without output and
+Claude Code falls back to its native interactive prompt. The device prompt is
+auto-cancelled when the hook closes. The firmware needs **no changes** — it
+already renders the prompt and emits `{"cmd":"permission","id","decision"}`.
 
 ## Setup
-1. Start the bridge (keep it running; later we'll make it a launchd agent):
+1. Install the bridge as a launchd agent (auto-start + restart on crash):
    ```
-   ~/.pio-venv/bin/python bridge/buddy_bridge.py
+   cp bridge/launchd/com.claude-buddy.bridge.plist ~/Library/LaunchAgents/
+   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claude-buddy.bridge.plist
    ```
-2. Add the hooks to `~/.claude/settings.json` (merge into existing `hooks`):
+   Logs: `~/.claude-buddy/bridge.log` / `bridge.err`. To stop/reload:
+   `launchctl bootout gui/$(id -u)/com.claude-buddy.bridge`.
+   (For ad-hoc runs without launchd: `~/.pio-venv/bin/python bridge/buddy_bridge.py`.)
+2. Add the hooks to `~/.claude/settings.json` (merge into existing `hooks`).
+   Status hooks (no timeout needed):
    ```json
    {
      "hooks": {
-       "SessionStart":     [{ "hooks": [{ "type": "command", "command": "python3 /Users/john/alibaba/s3stick/bridge/hooks/buddy_hook.py" }] }],
-       "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "python3 /Users/john/alibaba/s3stick/bridge/hooks/buddy_hook.py" }] }],
-       "Stop":             [{ "hooks": [{ "type": "command", "command": "python3 /Users/john/alibaba/s3stick/bridge/hooks/buddy_hook.py" }] }],
-       "Notification":     [{ "hooks": [{ "type": "command", "command": "python3 /Users/john/alibaba/s3stick/bridge/hooks/buddy_hook.py" }] }],
-       "SessionEnd":       [{ "hooks": [{ "type": "command", "command": "python3 /Users/john/alibaba/s3stick/bridge/hooks/buddy_hook.py" }] }]
+       "SessionStart":      [{ "hooks": [{ "type": "command", "command": "python3 /Users/john/alibaba/s3stick/bridge/hooks/buddy_hook.py" }] }],
+       "UserPromptSubmit":  [{ "hooks": [{ "type": "command", "command": "python3 /Users/john/alibaba/s3stick/bridge/hooks/buddy_hook.py" }] }],
+       "Stop":              [{ "hooks": [{ "type": "command", "command": "python3 /Users/john/alibaba/s3stick/bridge/hooks/buddy_hook.py" }] }],
+       "Notification":      [{ "hooks": [{ "type": "command", "command": "python3 /Users/john/alibaba/s3stick/bridge/hooks/buddy_hook.py" }] }],
+       "SessionEnd":        [{ "hooks": [{ "type": "command", "command": "python3 /Users/john/alibaba/s3stick/bridge/hooks/buddy_hook.py" }] }],
+       "PermissionRequest": [{ "matcher": "*", "timeout": 60, "hooks": [{ "type": "command", "command": "python3 /Users/john/alibaba/s3stick/bridge/hooks/buddy_hook.py" }] }]
      }
    }
    ```
+   The `PermissionRequest` hook **must** carry a `timeout` (≥ the hook's internal
+   40s wait) so it can block for the device decision.
 3. Open a new `claude` session → device `total` goes to 1; submit a prompt →
-   `running` ticks; the session ends → `total` drops.
+   `running` ticks; trigger a tool that needs approval → device shows the prompt,
+   press **A/B** to decide; the session ends → `total` drops.
 
 ## Privacy
 Only counts, the coarse event, the notification type, and the **cwd basename**
