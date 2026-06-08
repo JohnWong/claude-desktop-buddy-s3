@@ -89,15 +89,12 @@ static void _applyJson(const char* line, TamaState* out) {
   // adjusted epoch yields local components including weekday.
   JsonArray t = doc["time"];
   if (!t.isNull() && t.size() == 2) {
+    // Set the ESP32 system clock to LOCAL time (epoch + tz offset). StickS3 has
+    // no external RTC chip, so we keep time in the ESP32 system clock and read
+    // it back with gmtime() (no extra tz math needed since it's already local).
     time_t local = (time_t)t[0].as<uint32_t>() + (int32_t)t[1];
-    struct tm lt; gmtime_r(&local, &lt);
-    RTC_TimeTypeDef tm;
-    tm.hours = (uint8_t)lt.tm_hour; tm.minutes = (uint8_t)lt.tm_min; tm.seconds = (uint8_t)lt.tm_sec;
-    RTC_DateTypeDef dt;
-    dt.year = (uint16_t)(lt.tm_year + 1900); dt.month = (uint8_t)(lt.tm_mon + 1);
-    dt.date = (uint8_t)lt.tm_mday;          dt.weekDay = (uint8_t)lt.tm_wday;
-    M5.Rtc.setTime(&tm);
-    M5.Rtc.setDate(&dt);
+    struct timeval tv; tv.tv_sec = local; tv.tv_usec = 0;
+    settimeofday(&tv, nullptr);
     extern uint32_t _clkLastRead;
     _clkLastRead = 0;   // force re-read so _clkDt and _rtcValid agree
     _rtcValid = true;
