@@ -72,30 +72,17 @@ inline void statsOnApproval(uint32_t secondsToRespond) {
 // Tokens feed the pet. 50K per level, 5K per pip on the fed bar.
 // Bridge sends cumulative since its start; we add the delta. A drop means
 // the bridge restarted — resync without adding, don't lose NVS progress.
-static uint32_t _lastBridgeTokens = 0;
-static bool _tokensSynced = false;       // first-sight latch — see below
 static bool _levelUpPending = false;
 
 inline void statsOnBridgeTokens(uint32_t bridgeTotal) {
-  // The bridge sends its cumulative total since IT started. We track deltas.
-  // Bridge restart → number drops → resync. But on DEVICE reboot,
-  // _lastBridgeTokens is back to 0 while the bridge's total isn't — first
-  // packet would re-credit the entire session. Latch on first sight instead.
-  if (!_tokensSynced) {
-    _lastBridgeTokens = bridgeTotal;
-    _tokensSynced = true;
-    return;
-  }
-  if (bridgeTotal < _lastBridgeTokens) {
-    _lastBridgeTokens = bridgeTotal;     // bridge restarted
-    return;
-  }
-  uint32_t delta = bridgeTotal - _lastBridgeTokens;
-  _lastBridgeTokens = bridgeTotal;
-  if (delta == 0) return;
+  // The bridge now sends a PERSISTENT lifetime total (stored in tokens.json,
+  // surviving bridge restarts AND device erases). Treat it as the source of
+  // truth and only ever move forward — so a freshly-erased device restores its
+  // level from the bridge on first connect.
+  if (bridgeTotal <= _stats.tokens) return;
 
   uint8_t lvlBefore = (uint8_t)(_stats.tokens / TOKENS_PER_LEVEL);
-  _stats.tokens += delta;
+  _stats.tokens = bridgeTotal;
   uint8_t lvlAfter = (uint8_t)(_stats.tokens / TOKENS_PER_LEVEL);
 
   // Heartbeats are timer-driven telemetry — don't wear NVS on every delta.

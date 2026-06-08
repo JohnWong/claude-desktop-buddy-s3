@@ -105,6 +105,12 @@ def ledger_add(sid: str, cumulative: int):
 def tokens_today() -> int:
     return LEDGER.get(_today(), 0)
 
+
+def tokens_lifetime() -> int:
+    # Sum of every day ever recorded — a persistent, monotonic lifetime total
+    # that drives (and restores) the pet's level even after a device erase.
+    return sum(LEDGER.values())
+
 # Latest /usage rate-limit snapshot from the statusLine (five_hour / seven_day
 # used_percentage + reset epoch). Account-wide, not per-session.
 USAGE: dict = {}
@@ -184,7 +190,7 @@ def aggregate() -> dict:
         msg = f"working: {lbl}" if lbl else f"{running} working"
     else:
         msg = "awaiting you"
-    tokens = sum(SESSION_TOKENS.get(sid, 0) for sid in SESSIONS)
+    tokens = tokens_lifetime()   # persistent → drives & restores the pet level
     # Amber border only when you're truly free — ALL sessions idle (running==0).
     # A single session going idle while others run just gets the one-shot chime,
     # not the persistent border (kept lightweight on purpose).

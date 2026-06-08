@@ -698,13 +698,13 @@ void drawInfo() {
       ln("  last msg  %lus", (unsigned long)age);
     } else if (settings().bt) {
       spr.setTextColor(p.text, p.bg);
-      ln("TO PAIR");
+      ln("TO CONNECT");
       spr.setTextColor(p.textDim, p.bg);
-      ln(" Open Claude desktop");
-      ln(" > Developer");
-      ln(" > Hardware Buddy");
+      ln(" run the CLI bridge:");
+      ln("  buddy_bridge.py");
       y += 4;
-      ln(" auto-connects via BLE");
+      ln(" connects over BLE,");
+      ln(" no pairing needed.");
     }
 
   } else {
