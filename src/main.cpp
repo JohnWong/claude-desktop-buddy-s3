@@ -54,7 +54,7 @@ const uint8_t PET_PAGES = 2;
 uint8_t msgScroll = 0;
 uint16_t lastLineGen = 0;
 char     lastPromptId[40] = "";
-uint16_t lastWaitingCount = 0;   // edge-detect "waiting for input" alerts
+bool     lastNudge = false;      // edge-detect the "awaiting your input" nudge
 uint32_t lastInteractMs = 0;
 bool     dimmed = false;
 bool     screenOff = false;
@@ -1060,15 +1060,16 @@ void loop() {
     }
   }
 
-  // Waiting-for-input arrival (non-permission): distinct alert so you know
-  // Claude needs a reply, not just an approval. Permission prompts take
-  // priority — skip if one is active to avoid double-alerting.
-  if (tama.sessionsWaiting > lastWaitingCount && !tama.promptId[0]) {
+  // "Awaiting your input" nudge: Claude has been idle waiting for you a while
+  // (bridge sends a one-shot `nudge` on idle_prompt). GENTLE on purpose —
+  // single soft chime + one amber flash, distinct from the urgent red of a
+  // permission prompt. Skipped while an approval is up (that takes priority).
+  if (tama.nudge && !lastNudge && !tama.promptId[0]) {
     wake();
-    beep(900, 120); delay(90); beep(900, 120);   // double low chirp
-    alertFlash(0x001F, 2);                         // waiting: blue flash ×2
+    beep(700, 150);            // single soft low chime
+    alertFlash(0xFD20, 1);     // amber flash ×1 (calm)
   }
-  lastWaitingCount = tama.sessionsWaiting;
+  lastNudge = tama.nudge;
 
   bool inPrompt = tama.promptId[0] && !responseSent;
 

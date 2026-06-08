@@ -46,6 +46,15 @@ SESSIONS: dict[str, dict] = {}
 # closing — keyboard answered / timeout) resolves it.
 PENDING: dict[str, dict] = {}
 
+# Cumulative output tokens per session (from the hook's transcript read) → feeds
+# the buddy's leveling / every-50K-tokens celebrate.
+SESSION_TOKENS: dict[str, int] = {}
+
+# One-shot flags merged into the very next device frame, then cleared:
+#   completed → confetti celebrate (a turn just finished)
+#   nudge     → gentle "awaiting your input" amber chime (idle_prompt)
+ONESHOT: dict[str, bool] = {}
+
 
 def now() -> float:
     return time.monotonic()
@@ -72,20 +81,25 @@ def apply_event(ev: dict):
     evt = ev.get("evt")
     if evt == "end":
         SESSIONS.pop(sid, None)
+        SESSION_TOKENS.pop(sid, None)
         return
     s = touch(sid)
     if "cwd" in ev:
         s["label"] = ev["cwd"]
+    if "tokens" in ev:
+        SESSION_TOKENS[sid] = int(ev["tokens"])
     if evt == "start":
         s["state"] = "idle"
     elif evt == "run":
         s["state"] = "running"           # whole turn counts as busy (our redefine)
     elif evt == "idle":
         s["state"] = "idle"              # turn ended → awaiting your input
+        ONESHOT["completed"] = True      # brief celebrate, like the desktop app
     elif evt == "notify":
         nt = ev.get("ntype", "")
         if nt == "idle_prompt":
-            s["state"] = "idle"          # Claude is idle, waiting for you
+            s["state"] = "idle"
+            ONESHOT["nudge"] = True      # gentle "awaiting your input" reminder
         # permission_prompt handled in M3 (waiting + prompt relay)
 
 
@@ -104,7 +118,9 @@ def aggregate() -> dict:
         msg = f"working: {lbl}" if lbl else f"{running} working"
     else:
         msg = "awaiting you"
-    frame = {"total": total, "running": running, "waiting": waiting, "msg": msg}
+    tokens = sum(SESSION_TOKENS.get(sid, 0) for sid in SESSIONS)
+    frame = {"total": total, "running": running, "waiting": waiting,
+             "msg": msg, "tokens": tokens}
     if PENDING:
         # Surface the oldest pending approval as the device's prompt screen.
         pid = next(iter(PENDING))
@@ -215,8 +231,19 @@ async def ble_loop():
                     await client.start_notify(NUS_TX, on_tx)
                 except Exception as e:
                     print(f"[ble] TX subscribe failed: {e}")
+                # Sync the clock once per connection so the device RTC is right.
+                lt = time.localtime()
+                tzoff = lt.tm_gmtoff if lt.tm_gmtoff is not None else 0
+                ts = (json.dumps({"time": [int(time.time()), tzoff]}) + "\n").encode()
+                try:
+                    await client.write_gatt_char(NUS_RX, ts, response=True)
+                except Exception:
+                    pass
                 while client.is_connected:
                     frame = aggregate()
+                    if ONESHOT:                       # merge + clear one-shots
+                        frame.update(ONESHOT)
+                        ONESHOT.clear()
                     line = (json.dumps(frame) + "\n").encode()
                     try:
                         await client.write_gatt_char(NUS_RX, line, response=True)

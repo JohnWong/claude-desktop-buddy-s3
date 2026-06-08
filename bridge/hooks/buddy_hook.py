@@ -40,6 +40,26 @@ def post(obj: dict):
         pass  # fail-open: bridge down → no-op
 
 
+def count_output_tokens(path: str) -> int:
+    """Sum assistant output tokens from the transcript JSONL. Reads only the
+    numeric `usage`, never message content — privacy-preserving."""
+    if not path or not os.path.exists(path):
+        return 0
+    total = 0
+    try:
+        with open(path, "r") as f:
+            for line in f:
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+                usage = (obj.get("message") or {}).get("usage") or {}
+                total += int(usage.get("output_tokens", 0) or 0)
+    except Exception:
+        return 0
+    return total
+
+
 def summarize(tool: str, ti) -> str:
     """A short, non-sensitive detail for the device (cmd / path / url)."""
     if isinstance(ti, dict):
@@ -90,7 +110,8 @@ def main():
         post({"evt": "run", "sid": sid,
               "cwd": os.path.basename(data.get("cwd", "") or "")})
     elif event == "Stop":
-        post({"evt": "idle", "sid": sid})
+        post({"evt": "idle", "sid": sid,
+              "tokens": count_output_tokens(data.get("transcript_path", ""))})
     elif event == "Notification":
         post({"evt": "notify", "sid": sid,
               "ntype": data.get("notification_type", "")})
