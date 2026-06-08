@@ -668,6 +668,7 @@ void drawInfo() {
     uint32_t up = millis() / 1000;
     ln("  uptime   %luh %02lum", up / 3600, (up / 60) % 60);
     ln("  heap     %uKB", ESP.getFreeHeap() / 1024);
+    ln("  fw build %s", __TIME__);   // build marker — confirm running firmware
     ln("  bright   %u/4", brightLevel);
     ln("  bt       %s", settings().bt ? (dataBtActive() ? "linked" : "on") : "off");
     ln("  temp     %dC", compat::chipTempC());
