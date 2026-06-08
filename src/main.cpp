@@ -919,7 +919,7 @@ static void drawUsageInfo(const Palette& p, int& y) {
 static void drawUsageCorner() {
   if (tama.usageS5 < 0) return;
   const Palette& p = characterPalette();
-  const int top = 130;
+  const int top = 162;   // bottom-aligned just above the HUD strip, clear of pet
   spr.fillRect(0, top - 2, W, 46, p.bg);
   spr.setFont(&fonts::Font0);
   char buf[16];
