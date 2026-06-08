@@ -46,9 +46,66 @@ SESSIONS: dict[str, dict] = {}
 # closing — keyboard answered / timeout) resolves it.
 PENDING: dict[str, dict] = {}
 
+# Pending AskUserQuestion relays: id -> {"writer", "header", "opts"}. Same
+# request/response shape as PENDING — resolved by a device pick or hook close.
+ASK: dict[str, dict] = {}
+
 # Cumulative output tokens per session (from the hook's transcript read) → feeds
 # the buddy's leveling / every-50K-tokens celebrate.
 SESSION_TOKENS: dict[str, int] = {}
+
+# Persistent per-day output-token ledger for the today/week readout.
+# LEDGER: "YYYY-MM-DD" -> tokens that day. LEDGER_LAST: sid -> last-counted
+# cumulative (first-sight latched so a resumed session doesn't dump its whole
+# history into today). Persisted to tokens.json so week survives restarts.
+TOKENS_FILE = os.path.join(SOCK_DIR, "tokens.json")
+LEDGER: dict[str, int] = {}
+LEDGER_LAST: dict[str, int] = {}
+
+
+def _today() -> str:
+    return time.strftime("%Y-%m-%d", time.localtime())
+
+
+def ledger_load():
+    try:
+        with open(TOKENS_FILE) as f:
+            LEDGER.update({k: int(v) for k, v in json.load(f).items()})
+    except Exception:
+        pass
+
+
+def ledger_save():
+    try:
+        os.makedirs(SOCK_DIR, exist_ok=True)
+        with open(TOKENS_FILE, "w") as f:
+            json.dump(LEDGER, f)
+    except Exception:
+        pass
+
+
+def ledger_add(sid: str, cumulative: int):
+    """Count this session's growth into today's bucket (first-sight latched)."""
+    prev = LEDGER_LAST.get(sid)
+    LEDGER_LAST[sid] = cumulative
+    if prev is None or cumulative < prev:
+        return                       # first sight or transcript reset → no add
+    delta = cumulative - prev
+    if delta <= 0:
+        return
+    d = _today()
+    LEDGER[d] = LEDGER.get(d, 0) + delta
+    ledger_save()
+
+
+def tokens_today_week():
+    today = LEDGER.get(_today(), 0)
+    week = 0
+    now = time.time()
+    for i in range(7):
+        day = time.strftime("%Y-%m-%d", time.localtime(now - i * 86400))
+        week += LEDGER.get(day, 0)
+    return today, week
 
 # One-shot flags merged into the very next device frame, then cleared:
 #   completed → confetti celebrate (a turn just finished)
@@ -88,6 +145,7 @@ def apply_event(ev: dict):
         s["label"] = ev["cwd"]
     if "tokens" in ev:
         SESSION_TOKENS[sid] = int(ev["tokens"])
+        ledger_add(sid, int(ev["tokens"]))
     if evt == "start":
         s["state"] = "idle"
         s["awaiting"] = False
@@ -124,14 +182,31 @@ def aggregate() -> dict:
     tokens = sum(SESSION_TOKENS.get(sid, 0) for sid in SESSIONS)
     awaiting = (running == 0 and not PENDING
                 and any(s.get("awaiting") for s in SESSIONS.values()))
+    # "current session" = the running one, else the most-recently-seen session.
+    cur = None
+    for sid, s in SESSIONS.items():
+        if s["state"] == "running":
+            cur = sid
+            break
+    if cur is None and SESSIONS:
+        cur = max(SESSIONS, key=lambda k: SESSIONS[k]["seen"])
+    session_tokens = SESSION_TOKENS.get(cur, 0) if cur else 0
+    today, week = tokens_today_week()
     frame = {"total": total, "running": running, "waiting": waiting,
-             "msg": msg, "tokens": tokens, "awaiting": awaiting}
+             "msg": msg, "tokens": tokens, "awaiting": awaiting,
+             "session_tokens": session_tokens,
+             "tokens_today": today, "tokens_week": week}
     if PENDING:
         # Surface the oldest pending approval as the device's prompt screen.
         pid = next(iter(PENDING))
         p = PENDING[pid]
         frame["prompt"] = {"id": pid, "tool": p["tool"], "hint": p["hint"]}
         frame["msg"] = f"approve? {p['tool']}"
+    if ASK:
+        aid = next(iter(ASK))
+        a = ASK[aid]
+        frame["ask"] = {"id": aid, "header": a["header"], "opts": a["opts"]}
+        frame["msg"] = "question"
     return frame
 
 
@@ -157,6 +232,17 @@ async def handle_conn(reader: asyncio.StreamReader, writer: asyncio.StreamWriter
                     print(f"[prompt] {ev.get('tool')} id={pid} -> awaiting device",
                           flush=True)
                 # keep the connection OPEN; resolved by on_tx or by EOF below
+            elif ev.get("evt") == "ask":
+                aid = str(ev.get("id") or "")
+                if aid:
+                    opts = [str(o)[:21] for o in (ev.get("opts") or [])][:4]
+                    ASK[aid] = {"writer": writer,
+                                "header": str(ev.get("header", ""))[:21],
+                                "opts": opts}
+                    owned.add(aid)
+                    print(f"[ask] id={aid} opts={opts} -> awaiting device",
+                          flush=True)
+                # keep OPEN; resolved by device pick (on_tx) or EOF below
             else:
                 apply_event(ev)
                 print(f"[sock] {ev.get('evt')} sid={ev.get('sid')} -> {aggregate()}",
@@ -169,6 +255,8 @@ async def handle_conn(reader: asyncio.StreamReader, writer: asyncio.StreamWriter
         for pid in owned:
             if PENDING.pop(pid, None) is not None:
                 print(f"[prompt] id={pid} cancelled (hook closed)", flush=True)
+            if ASK.pop(pid, None) is not None:
+                print(f"[ask] id={pid} cancelled (hook closed)", flush=True)
         try:
             writer.close()
         except Exception:
@@ -211,6 +299,20 @@ def on_tx(_char, data: bytearray):
             print(f"[prompt] id={pid} -> {reply} (from device)", flush=True)
         except Exception as e:
             print(f"[prompt] reply failed: {e}", flush=True)
+    elif obj.get("cmd") == "ask":
+        aid = str(obj.get("id") or "")
+        idx = obj.get("index")
+        a = ASK.pop(aid, None)
+        if a is None:
+            return
+        # index 255 (the "terminal" escape row) → no answer, fall back to picker.
+        payload = {"escape": True} if idx == 255 else {"index": int(idx)}
+        try:
+            a["writer"].write((json.dumps(payload) + "\n").encode())
+            a["writer"].close()
+            print(f"[ask] id={aid} -> {payload} (from device)", flush=True)
+        except Exception as e:
+            print(f"[ask] reply failed: {e}", flush=True)
 
 
 async def find_dev():
@@ -263,6 +365,7 @@ async def ble_loop():
 
 async def main():
     print("[bridge] starting (socket + BLE)")
+    ledger_load()
     await asyncio.gather(socket_server(), ble_loop())
 
 

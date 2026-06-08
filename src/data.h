@@ -12,6 +12,8 @@ struct TamaState {
   bool     nudge;            // one-shot: chime when you first become awaited
   bool     awaiting;         // persistent: Claude is idle, waiting on your input
   uint32_t tokensToday;
+  uint32_t tokensWeek;       // output tokens over the last 7 days (bridge ledger)
+  uint32_t sessionTokens;    // output tokens of the current/active session
   uint32_t lastUpdated;
   char     msg[24];
   bool     connected;
@@ -21,6 +23,11 @@ struct TamaState {
   char     promptId[40];     // pending permission request ID; empty = no prompt
   char     promptTool[20];
   char     promptHint[44];
+  // AskUserQuestion relay: a multiple-choice question to answer on-device.
+  char     askId[40];        // empty = no question pending
+  char     askHeader[22];    // short question label
+  char     askOpts[4][22];   // up to 4 option labels
+  uint8_t  askCount;         // number of options (0..4)
 };
 
 // ---------------------------------------------------------------------------
@@ -103,6 +110,8 @@ static void _applyJson(const char* line, TamaState* out) {
   uint32_t bridgeTokens = doc["tokens"] | 0;
   if (doc["tokens"].is<uint32_t>()) statsOnBridgeTokens(bridgeTokens);
   out->tokensToday = doc["tokens_today"] | out->tokensToday;
+  out->tokensWeek    = doc["tokens_week"]    | out->tokensWeek;
+  out->sessionTokens = doc["session_tokens"] | out->sessionTokens;
   const char* m = doc["msg"];
   if (m) { strncpy(out->msg, m, sizeof(out->msg)-1); out->msg[sizeof(out->msg)-1]=0; }
   JsonArray la = doc["entries"];
@@ -127,6 +136,23 @@ static void _applyJson(const char* line, TamaState* out) {
     strncpy(out->promptHint, ph  ? ph  : "", sizeof(out->promptHint)-1); out->promptHint[sizeof(out->promptHint)-1]=0;
   } else {
     out->promptId[0] = 0; out->promptTool[0] = 0; out->promptHint[0] = 0;
+  }
+  JsonObject ask = doc["ask"];
+  if (!ask.isNull()) {
+    const char* aid = ask["id"]; const char* ah = ask["header"];
+    strncpy(out->askId,     aid ? aid : "", sizeof(out->askId)-1);     out->askId[sizeof(out->askId)-1]=0;
+    strncpy(out->askHeader, ah  ? ah  : "", sizeof(out->askHeader)-1); out->askHeader[sizeof(out->askHeader)-1]=0;
+    JsonArray opts = ask["opts"];
+    uint8_t n = 0;
+    if (!opts.isNull()) for (JsonVariant v : opts) {
+      if (n >= 4) break;
+      const char* o = v.as<const char*>();
+      strncpy(out->askOpts[n], o ? o : "", 21); out->askOpts[n][21]=0;
+      n++;
+    }
+    out->askCount = n;
+  } else {
+    out->askId[0] = 0; out->askCount = 0;
   }
   out->lastUpdated = millis();
   _lastLiveMs = millis();

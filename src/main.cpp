@@ -54,6 +54,9 @@ const uint8_t PET_PAGES = 2;
 uint8_t msgScroll = 0;
 uint16_t lastLineGen = 0;
 char     lastPromptId[40] = "";
+char     lastAskId[40] = "";     // edge-detect AskUserQuestion arrival
+uint8_t  askSel = 0;             // highlighted choice in the ask screen
+bool     askResponseSent = false;
 bool     lastNudge = false;      // edge-detect the "awaiting your input" nudge
 uint32_t lastInteractMs = 0;
 bool     dimmed = false;
@@ -808,6 +811,38 @@ static void drawApproval() {
   }
 }
 
+// AskUserQuestion choice list. Options plus a "type in terminal" escape row.
+// B moves the highlight, A selects. Selecting the escape (or no answer →
+// hook timeout) falls back to the native terminal picker.
+static void drawAsk() {
+  const Palette& p = characterPalette();
+  spr.fillSprite(p.bg);
+  spr.setTextSize(1);
+  spr.setTextColor(p.body, p.bg);
+  spr.setCursor(4, 6);
+  spr.print("Claude asks:");
+  spr.setTextColor(p.text, p.bg);
+  spr.setCursor(4, 18);
+  spr.printf("%.21s", tama.askHeader);
+
+  int y = 38;
+  uint8_t rows = tama.askCount + 1;          // + the terminal escape row
+  for (uint8_t i = 0; i < rows; i++) {
+    bool sel = (i == askSel);
+    bool esc = (i == tama.askCount);
+    if (sel) spr.fillRoundRect(2, y - 2, W - 4, 16, 3, p.body);
+    spr.setTextColor(sel ? p.bg : (esc ? p.textDim : p.text), sel ? p.body : p.bg);
+    spr.setCursor(8, y + 2);
+    if (esc) spr.print("> terminal / type");
+    else     spr.printf("%.20s", tama.askOpts[i]);
+    y += 18;
+  }
+
+  spr.setTextColor(p.textDim, p.bg);
+  spr.setCursor(4, H - 12);
+  spr.print("B: move   A: pick");
+}
+
 static void tinyHeart(int x, int y, bool filled, uint16_t col) {
   if (filled) {
     spr.fillCircle(x - 2, y, 2, col);
@@ -872,8 +907,10 @@ static void drawPetStats(const Palette& p) {
     else if (v >= 1000) spr.printf("%s%lu.%luK", label, v/1000, (v/100)%10);
     else                spr.printf("%s%lu", label, v);
   };
-  tokFmt("tokens   ", stats().tokens, y + 30);
-  tokFmt("today    ", tama.tokensToday, y + 40);
+  tokFmt("session  ", tama.sessionTokens, y + 30);
+  tokFmt("today    ", tama.tokensToday,   y + 40);
+  tokFmt("week     ", tama.tokensWeek,    y + 50);
+  tokFmt("total    ", stats().tokens,     y + 60);
 }
 
 static void drawPetHowTo(const Palette& p) {
@@ -1075,6 +1112,25 @@ void loop() {
     }
   }
 
+  // AskUserQuestion arrival: reset selection, chirp, jump to the ask screen.
+  if (strcmp(tama.askId, lastAskId) != 0) {
+    strncpy(lastAskId, tama.askId, sizeof(lastAskId)-1);
+    lastAskId[sizeof(lastAskId)-1] = 0;
+    askResponseSent = false;
+    askSel = 0;
+    if (tama.askId[0]) {
+      wake();
+      beep(1000, 80); delay(40); beep(1300, 80);   // two-tone "question"
+      displayMode = DISP_NORMAL;
+      menuOpen = settingsOpen = resetOpen = false;
+      applyDisplayMode();
+      characterInvalidate();
+      if (buddyMode) buddyInvalidate();
+    }
+  }
+
+  bool inAsk = tama.askId[0] && !askResponseSent;
+
   // "Awaiting your input" nudge: Claude has been idle waiting for you a while
   // (bridge sends a one-shot `nudge` on idle_prompt). GENTLE on purpose —
   // single soft chime + one amber flash, distinct from the urgent red of a
@@ -1125,6 +1181,8 @@ void loop() {
       responseSent = true;
       statsOnApproval((millis() - promptArrivedMs) / 1000);
       beep(2600, 60); beep(2900, 80);   // rising double-chirp = "always"
+    } else if (inAsk) {
+      // ignore long-press during a question (short A picks); don't open the menu
     } else if (resetOpen) { resetOpen = false; }
     else if (settingsOpen) { settingsOpen = false; characterInvalidate(); }
     else {
@@ -1136,7 +1194,19 @@ void loop() {
   }
   if (M5.BtnA.wasReleased()) {
     if (!btnALong && !swallowBtnA) {
-      if (inPrompt) {
+      if (inAsk) {
+        // Pick the highlighted option. The last row (index == askCount) is the
+        // "terminal" escape → tell the bridge to fall back to the native picker.
+        uint8_t idx = (askSel >= tama.askCount) ? 255 : askSel;
+        char cmd[96];
+        snprintf(cmd, sizeof(cmd), "{\"cmd\":\"ask\",\"id\":\"%s\",\"index\":%u}",
+                 tama.askId, idx);
+        sendCmd(cmd);
+        askResponseSent = true;
+        beep(idx == 255 ? 800 : 2400, 60);
+        characterInvalidate();
+        if (buddyMode) buddyInvalidate();
+      } else if (inPrompt) {
         char cmd[96];
         snprintf(cmd, sizeof(cmd), "{\"cmd\":\"permission\",\"id\":\"%s\",\"decision\":\"once\"}", tama.promptId);
         sendCmd(cmd);
@@ -1169,6 +1239,12 @@ void loop() {
   if (M5.BtnB.wasPressed()) {
     if (swallowBtnB) { swallowBtnB = false; }
     else
+    if (inAsk) {
+      beep(1800, 30);
+      askSel = (askSel + 1) % (tama.askCount + 1);   // +1 for the escape row
+      characterInvalidate();
+      if (buddyMode) buddyInvalidate();
+    } else
     if (inPrompt) {
       char cmd[96];
       snprintf(cmd, sizeof(cmd), "{\"cmd\":\"permission\",\"id\":\"%s\",\"decision\":\"deny\"}", tama.promptId);
@@ -1279,6 +1355,7 @@ void loop() {
     drawClock();
   } else if (!napping && !screenOff) {
     if (blePasskey()) drawPasskey();
+    else if (tama.askId[0] && !askResponseSent) drawAsk();
     else if (clocking) drawClock();
     else if (displayMode == DISP_INFO) drawInfo();
     else if (displayMode == DISP_PET) drawPet();

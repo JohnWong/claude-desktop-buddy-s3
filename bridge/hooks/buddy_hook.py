@@ -27,6 +27,7 @@ SOCK_PATH = os.path.expanduser("~/.claude-buddy/bridge.sock")
 # Wait at most this long for a device decision before falling back to the native
 # interactive prompt. Must be < the hook's timeout in settings.json.
 PERMISSION_WAIT = 40.0
+ASK_WAIT = 12.0          # per-question wait for an AskUserQuestion device pick
 
 
 def post(obj: dict):
@@ -58,6 +59,59 @@ def count_output_tokens(path: str) -> int:
     except Exception:
         return 0
     return total
+
+
+def ask_device(sid: str, qid: str, header: str, options: list):
+    """Relay a multiple-choice question to the device. Returns the chosen option
+    index, or None to fall back to the native terminal picker (escape / timeout /
+    no bridge)."""
+    try:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(ASK_WAIT)
+        s.connect(SOCK_PATH)
+        s.sendall((json.dumps({"evt": "ask", "sid": sid, "id": qid,
+                               "header": header, "opts": options}) + "\n").encode())
+        buf = b""
+        while b"\n" not in buf:
+            chunk = s.recv(256)
+            if not chunk:
+                return None
+            buf += chunk
+        s.close()
+        obj = json.loads(buf.split(b"\n", 1)[0].decode())
+        if obj.get("escape"):
+            return None
+        return obj.get("index")
+    except Exception:
+        return None
+
+
+def handle_ask(data: dict):
+    """Intercept AskUserQuestion: answer each question on the device. Any escape/
+    timeout/multiSelect falls back to the native picker (no stdout)."""
+    ti = data.get("tool_input", {}) or {}
+    questions = ti.get("questions") or []
+    sid = data.get("session_id", "")
+    answers = {}
+    for i, q in enumerate(questions):
+        opts = [o.get("label", "") for o in (q.get("options") or []) if o.get("label")]
+        if q.get("multiSelect") or not opts:
+            return                      # v1: single-select only → native picker
+        header = (q.get("header") or q.get("question", ""))[:21]
+        qid = f"{sid[:8]}-a{i}-{int(time.time() * 1000) % 100000}"
+        idx = ask_device(sid, qid, header, opts[:4])
+        if idx is None or not (0 <= idx < len(opts)):
+            return                      # escape/timeout → native picker
+        answers[q.get("question", "")] = opts[idx]
+    if not answers:
+        return
+    new_input = dict(ti)
+    new_input["answers"] = answers
+    print(json.dumps({"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "allow",
+        "updatedInput": new_input,
+    }}))
 
 
 def summarize(tool: str, ti) -> str:
@@ -117,8 +171,14 @@ def main():
               "ntype": data.get("notification_type", "")})
     elif event == "SessionEnd":
         post({"evt": "end", "sid": sid})
+    elif event == "PreToolUse":
+        if data.get("tool_name") == "AskUserQuestion":
+            handle_ask(data)
+        sys.exit(0)                         # no-op for all other tools
     elif event == "PermissionRequest":
         tool = data.get("tool_name", "")
+        if tool == "AskUserQuestion":
+            sys.exit(0)                     # handled by PreToolUse, don't relay
         hint = summarize(tool, data.get("tool_input", {}))
         decision = request_decision(sid, tool, hint)   # allow | always | deny | None
         if decision == "deny":
