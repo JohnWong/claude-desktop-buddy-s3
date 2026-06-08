@@ -775,6 +775,9 @@ static void drawApproval() {
     spr.setCursor(4, H - 12);
     spr.print("sent...");
   } else {
+    spr.setTextColor(p.textDim, p.bg);
+    spr.setCursor(4, H - 22);
+    spr.print("hold A: always allow");
     spr.setTextColor(GREEN, p.bg);
     spr.setCursor(4, H - 12);
     spr.print("A: approve");
@@ -1098,7 +1101,18 @@ void loop() {
   if (M5.BtnA.pressedFor(600) && !btnALong && !swallowBtnA) {
     btnALong = true;
     beep(800, 60);
-    if (resetOpen) { resetOpen = false; }
+    if (inPrompt) {
+      // Hold A on an approval = ALWAYS allow (persist a rule for this tool).
+      // Short A is approve-once; this is the third option without a list UI.
+      char cmd[96];
+      snprintf(cmd, sizeof(cmd),
+               "{\"cmd\":\"permission\",\"id\":\"%s\",\"decision\":\"always\"}",
+               tama.promptId);
+      sendCmd(cmd);
+      responseSent = true;
+      statsOnApproval((millis() - promptArrivedMs) / 1000);
+      beep(2600, 60); beep(2900, 80);   // rising double-chirp = "always"
+    } else if (resetOpen) { resetOpen = false; }
     else if (settingsOpen) { settingsOpen = false; characterInvalidate(); }
     else {
       menuOpen = !menuOpen;

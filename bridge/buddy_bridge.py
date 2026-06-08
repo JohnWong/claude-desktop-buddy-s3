@@ -195,11 +195,11 @@ def on_tx(_char, data: bytearray):
         return
     if obj.get("cmd") == "permission":
         pid = str(obj.get("id") or "")
-        decision = obj.get("decision")           # "once" (approve) | "deny"
+        decision = obj.get("decision")           # "once" | "always" | "deny"
         p = PENDING.pop(pid, None)
         if p is None:
             return
-        reply = "allow" if decision == "once" else "deny"
+        reply = {"once": "allow", "always": "always"}.get(decision, "deny")
         try:
             p["writer"].write((json.dumps({"decision": reply}) + "\n").encode())
             p["writer"].close()                  # unblocks the waiting hook

@@ -120,13 +120,21 @@ def main():
     elif event == "PermissionRequest":
         tool = data.get("tool_name", "")
         hint = summarize(tool, data.get("tool_input", {}))
-        decision = request_decision(sid, tool, hint)
-        if decision in ("allow", "deny"):
+        decision = request_decision(sid, tool, hint)   # allow | always | deny | None
+        if decision == "deny":
             print(json.dumps({"hookSpecificOutput": {
                 "hookEventName": "PermissionRequest",
-                "decision": {"behavior": decision},
-            }}))
-        # else: no stdout → Claude Code falls back to the native prompt
+                "decision": {"behavior": "deny"}}}))
+        elif decision == "always":
+            # Persist a rule so this tool isn't prompted again (hold-A on device).
+            print(json.dumps({"hookSpecificOutput": {
+                "hookEventName": "PermissionRequest",
+                "decision": {"behavior": "allow", "applyRule": tool}}}))
+        elif decision == "allow":
+            print(json.dumps({"hookSpecificOutput": {
+                "hookEventName": "PermissionRequest",
+                "decision": {"behavior": "allow"}}}))
+        # else None: no stdout → Claude Code falls back to the native prompt
         sys.exit(0)
 
     sys.exit(0)  # never block Claude Code
