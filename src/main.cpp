@@ -913,18 +913,29 @@ static void drawUsageInfo(const Palette& p, int& y) {
   }
 }
 
-// Home usage: one line in the bottom HUD strip (cleared every frame, so it
-// never covers the pet). Session 5h % + reset; week 7d lives on the Info page.
-// Sits just above the msg line, so the two don't overlap.
+// Home usage: prominent session-5h block (label + big % + bar + reset), lower
+// half. 5h only (week 7d stays on the Info page). It clears its own area, so it
+// sits cleanly over the pet's lower body.
 static void drawUsageCorner() {
   if (tama.usageS5 < 0) return;
   const Palette& p = characterPalette();
+  const int top = 130;
+  spr.fillRect(0, top - 2, W, 46, p.bg);
   spr.setFont(&fonts::Font0);
+  char buf[16];
+
   spr.setTextSize(1);
-  spr.setTextColor(p.body, p.bg);
-  char r[12]; fmtDur(tama.usageS5In, r, sizeof(r));
-  spr.setCursor(4, H - 20);
-  spr.printf("5h %d%%  in %s", tama.usageS5, r);
+  spr.setTextColor(p.textDim, p.bg);
+  spr.setCursor(6, top); spr.print("session 5h");
+  spr.setTextSize(2);
+  spr.setTextColor(p.text, p.bg);
+  spr.setCursor(W - 52, top - 3);
+  spr.printf("%d%%", tama.usageS5);
+  spr.setTextSize(1);
+  usageBar(p, 6, top + 18, W - 12, tama.usageS5);
+  fmtDur(tama.usageS5In, buf, sizeof(buf));
+  spr.setTextColor(p.textDim, p.bg);
+  spr.setCursor(6, top + 32); spr.printf("resets in %s", buf);
 }
 
 static void drawPetStats(const Palette& p) {
