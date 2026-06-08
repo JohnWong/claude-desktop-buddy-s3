@@ -913,22 +913,36 @@ static void drawUsageInfo(const Palette& p, int& y) {
   }
 }
 
-// Compact home-screen line at the BOTTOM: 5h % + reset countdown.
+// Prominent usage block on the home screen, lower-half centre (where the
+// passkey used to be). Drawn when usage is known and nothing else owns that
+// space. Session 5h is the headline (big %), week 7d a smaller second row.
 static void drawUsageCorner() {
   if (tama.usageS5 < 0 && tama.usageW7 < 0) return;
   const Palette& p = characterPalette();
+  const int top = 112;
+  spr.fillRect(0, top, W, 84, p.bg);    // clear the area (covers pet's lower body)
   spr.setFont(&fonts::Font0);
+  char buf[16];
+
   spr.setTextSize(1);
   spr.setTextColor(p.textDim, p.bg);
-  char buf[24], r[12];
-  if (tama.usageS5 >= 0) {
-    fmtDur(tama.usageS5In, r, sizeof(r));
-    snprintf(buf, sizeof(buf), "5h %d%%  resets %s", tama.usageS5, r);
-  } else {
-    snprintf(buf, sizeof(buf), "7d %d%%", tama.usageW7);
-  }
-  spr.setCursor(2, H - 9);
-  spr.print(buf);
+  spr.setCursor(6, top); spr.print("session 5h");
+  spr.setTextSize(2);
+  spr.setTextColor(p.text, p.bg);
+  spr.setCursor(W - 52, top - 3);
+  if (tama.usageS5 >= 0) spr.printf("%d%%", tama.usageS5); else spr.print("--");
+  spr.setTextSize(1);
+  usageBar(p, 6, top + 18, W - 12, tama.usageS5);
+  fmtDur(tama.usageS5In, buf, sizeof(buf));
+  spr.setTextColor(p.textDim, p.bg);
+  spr.setCursor(6, top + 32); spr.printf("resets in %s", buf);
+
+  int y2 = top + 50;
+  spr.setTextColor(p.text, p.bg);
+  spr.setCursor(6, y2);
+  if (tama.usageW7 >= 0) spr.printf("week 7d  %d%%", tama.usageW7);
+  else                   spr.print("week 7d  --");
+  usageBar(p, 6, y2 + 12, W - 12, tama.usageW7);
 }
 
 static void drawPetStats(const Palette& p) {
