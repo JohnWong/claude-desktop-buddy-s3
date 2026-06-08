@@ -108,12 +108,16 @@ def handle_ask(data: dict):
         answers[q.get("question", "")] = opts[idx]
     if not answers:
         return
-    new_input = dict(ti)
-    new_input["answers"] = answers
+    # updatedInput.answers does NOT pre-answer AskUserQuestion (the picker still
+    # shows). Instead DENY the tool and hand the device's selection back to the
+    # model via the reason, so it proceeds without re-asking.
+    parts = [f"“{q}” → “{a}”" for q, a in answers.items()]
+    reason = ("Answered on the hardware buddy: " + "; ".join(parts)
+              + ". Treat these as the user's answers and continue; do not ask again.")
     print(json.dumps({"hookSpecificOutput": {
         "hookEventName": "PreToolUse",
-        "permissionDecision": "allow",
-        "updatedInput": new_input,
+        "permissionDecision": "deny",
+        "permissionDecisionReason": reason,
     }}))
 
 
