@@ -23,7 +23,7 @@ static void startBt() {
 const int W = 135, H = 240;
 const int CX = W / 2;
 const int CY_BASE = 120;
-const int LED_PIN = BUDDY_DEFAULT_LED_PIN;   // red LED, active-low (S3: G19)
+// (StickS3 has no user LED — G19 is USB D-. Attention shows as a screen pulse.)
 
 // Colors used across multiple UI surfaces
 const uint16_t HOT   = 0xFA20;   // red-orange: warnings, impatience, deny
@@ -781,6 +781,15 @@ static void drawApproval() {
     spr.setTextColor(HOT, p.bg);
     spr.setCursor(W - 48, H - 12);
     spr.print("B: deny");
+
+    // No physical LED on StickS3 — pulse a red border while the prompt is
+    // unanswered so it's noticeable from across the room. ~1Hz blink, gated by
+    // the "led" setting (now the attention-pulse toggle). Drawn last so it sits
+    // on top of everything; thin enough not to cover the text.
+    if (settings().led && (millis() / 500) % 2 == 0) {
+      for (int i = 0; i < 3; i++)
+        spr.drawRect(i, i, W - 2 * i, H - 2 * i, 0xF800);   // red
+    }
   }
 }
 
@@ -959,8 +968,6 @@ void setup() {
   M5.Speaker.begin();
   M5.Speaker.setVolume(160);
   startBt();
-  pinMode(LED_PIN, OUTPUT);
-  digitalWrite(LED_PIN, HIGH);   // off
   applyBrightness();
   lastInteractMs = millis();
   statsLoad();
@@ -1019,12 +1026,8 @@ void loop() {
 
   if ((int32_t)(now - oneShotUntil) >= 0) activeState = baseState;
 
-  // LED: pulse on attention, otherwise off
-  if (activeState == P_ATTENTION && settings().led) {
-    digitalWrite(LED_PIN, (now / 400) % 2 ? LOW : HIGH);
-  } else {
-    digitalWrite(LED_PIN, HIGH);
-  }
+  // StickS3 has no user LED (G19 is USB D-), so the attention signal lives on
+  // the screen — see drawApproval()'s pulsing red border.
 
   // shake → dizzy + force scenario advance
   if (now - lastShakeCheck > 50) {
