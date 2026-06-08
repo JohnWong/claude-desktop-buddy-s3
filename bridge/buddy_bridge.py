@@ -105,6 +105,10 @@ def ledger_add(sid: str, cumulative: int):
 def tokens_today() -> int:
     return LEDGER.get(_today(), 0)
 
+# Latest /usage rate-limit snapshot from the statusLine (five_hour / seven_day
+# used_percentage + reset epoch). Account-wide, not per-session.
+USAGE: dict = {}
+
 # One-shot flags merged into the very next device frame, then cleared:
 #   completed → confetti celebrate (a turn just finished)
 #   nudge     → gentle "awaiting your input" amber chime (idle_prompt)
@@ -134,6 +138,9 @@ def apply_event(ev: dict):
     """Update the session registry from a hook event."""
     sid = ev.get("sid") or "?"
     evt = ev.get("evt")
+    if evt == "usage":
+        USAGE.update({k: ev.get(k) for k in ("s5", "s5_reset", "w7", "w7_reset")})
+        return
     if evt == "end":
         SESSIONS.pop(sid, None)
         SESSION_TOKENS.pop(sid, None)
@@ -186,6 +193,14 @@ def aggregate() -> dict:
     frame = {"total": total, "running": running, "waiting": waiting,
              "msg": msg, "tokens": tokens, "awaiting": awaiting,
              "tokens_today": tokens_today()}
+    if USAGE.get("s5") is not None or USAGE.get("w7") is not None:
+        # Send remaining-seconds-to-reset (computed fresh) so the device needs
+        # no clock of its own; -1 when unknown.
+        now = int(time.time())
+        def remain(ts):
+            return max(0, int(ts) - now) if ts else -1
+        frame["usage"] = {"s5": USAGE.get("s5", -1), "s5_in": remain(USAGE.get("s5_reset")),
+                          "w7": USAGE.get("w7", -1), "w7_in": remain(USAGE.get("w7_reset"))}
     if PENDING:
         # Surface the oldest pending approval as the device's prompt screen.
         pid = next(iter(PENDING))

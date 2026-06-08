@@ -46,7 +46,7 @@ uint8_t menuSel     = 0;
 uint8_t brightLevel = 4;           // 0..4 → ScreenBreath 20..100
 bool    btnALong    = false;
 
-enum DisplayMode { DISP_NORMAL, DISP_PET, DISP_INFO, DISP_COUNT };
+enum DisplayMode { DISP_NORMAL, DISP_USAGE, DISP_PET, DISP_INFO, DISP_COUNT };
 uint8_t displayMode = DISP_NORMAL;
 uint8_t infoPage = 0;
 uint8_t petPage = 0;
@@ -861,6 +861,71 @@ static void tinyHeart(int x, int y, bool filled, uint16_t col) {
   }
 }
 
+static void fmtDur(long s, char* out, size_t n) {
+  if (s < 0) { snprintf(out, n, "--"); return; }
+  long d = s / 86400, h = (s % 86400) / 3600, m = (s % 3600) / 60;
+  if (d > 0)      snprintf(out, n, "%ldd %ldh", d, h);
+  else if (h > 0) snprintf(out, n, "%ldh %02ldm", h, m);
+  else            snprintf(out, n, "%ldm", m);
+}
+
+static void usageBar(const Palette& p, int x, int y, int w, int pct) {
+  spr.drawRoundRect(x, y, w, 12, 2, p.textDim);
+  if (pct > 0) {
+    int fw = (w - 2) * (pct > 100 ? 100 : pct) / 100;
+    uint16_t col = pct >= 90 ? RED : (pct >= 70 ? 0xFD20 : GREEN);
+    spr.fillRoundRect(x + 1, y + 1, fw < 1 ? 1 : fw, 10, 1, col);
+  }
+}
+
+// Dedicated /usage screen: session 5h and weekly 7d limits, as bars + reset.
+static void drawUsage() {
+  const Palette& p = characterPalette();
+  spr.fillSprite(p.bg);
+  spr.setFont(&fonts::Font0);
+  spr.setTextSize(1);
+  spr.setTextColor(p.body, p.bg);
+  spr.setCursor(4, 6); spr.print("USAGE");
+  char buf[16];
+
+  struct { const char* lbl; int pct; long in; } rows[2] = {
+    {"session 5h", tama.usageS5, tama.usageS5In},
+    {"week 7d",    tama.usageW7, tama.usageW7In},
+  };
+  int y = 30;
+  for (int i = 0; i < 2; i++) {
+    spr.setTextColor(p.text, p.bg);
+    spr.setCursor(4, y); spr.print(rows[i].lbl);
+    spr.setCursor(W - 34, y);
+    if (rows[i].pct >= 0) spr.printf("%d%%", rows[i].pct); else spr.print("--");
+    usageBar(p, 4, y + 12, W - 8, rows[i].pct);
+    fmtDur(rows[i].in, buf, sizeof(buf));
+    spr.setTextColor(p.textDim, p.bg);
+    spr.setCursor(4, y + 28); spr.printf("resets in %s", buf);
+    y += 52;
+  }
+  if (tama.usageS5 < 0 && tama.usageW7 < 0) {
+    spr.setTextColor(p.textDim, p.bg);
+    spr.setCursor(4, H - 16); spr.print("waiting for statusline");
+  }
+}
+
+// Compact one-liner for the home screen corner.
+static void drawUsageCorner() {
+  if (tama.usageS5 < 0 && tama.usageW7 < 0) return;
+  const Palette& p = characterPalette();
+  spr.setFont(&fonts::Font0);
+  spr.setTextSize(1);
+  spr.setTextColor(p.textDim, p.bg);
+  spr.setCursor(2, 1);
+  if (tama.usageS5 >= 0 && tama.usageW7 >= 0)
+    spr.printf("5h %d%%  7d %d%%", tama.usageS5, tama.usageW7);
+  else if (tama.usageS5 >= 0)
+    spr.printf("5h %d%%", tama.usageS5);
+  else
+    spr.printf("7d %d%%", tama.usageW7);
+}
+
 static void drawPetStats(const Palette& p) {
   const int TOP = 70;
   spr.fillRect(0, TOP, W, H - TOP, p.bg);
@@ -1023,6 +1088,8 @@ void setup() {
   M5.Speaker.begin();
   M5.Speaker.setVolume(160);
   startBt();
+  tama.usageS5 = tama.usageW7 = -1;   // unknown until the statusline reports
+  tama.usageS5In = tama.usageW7In = -1;
   applyBrightness();
   lastInteractMs = millis();
   statsLoad();
@@ -1360,9 +1427,10 @@ void loop() {
     if (blePasskey()) drawPasskey();
     else if (tama.askId[0] && !askResponseSent) drawAsk();
     else if (clocking) drawClock();
+    else if (displayMode == DISP_USAGE) drawUsage();
     else if (displayMode == DISP_INFO) drawInfo();
     else if (displayMode == DISP_PET) drawPet();
-    else if (settings().hud) drawHUD();
+    else if (settings().hud) { drawHUD(); drawUsageCorner(); }
     if (resetOpen) drawReset();
     else if (settingsOpen) drawSettings();
     else if (menuOpen) drawMenu();

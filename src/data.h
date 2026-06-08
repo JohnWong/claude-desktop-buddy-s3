@@ -27,6 +27,11 @@ struct TamaState {
   char     askProj[22];      // project (cwd basename) so you know which session
   char     askOpts[4][22];   // up to 4 option labels
   uint8_t  askCount;         // number of options (0..4)
+  // /usage rate-limit snapshot (-1 = unknown). _in = seconds to reset.
+  int      usageS5;          // five-hour used %
+  int      usageW7;          // seven-day used %
+  long     usageS5In;        // seconds until 5h reset
+  long     usageW7In;        // seconds until 7d reset
 };
 
 // ---------------------------------------------------------------------------
@@ -151,6 +156,13 @@ static void _applyJson(const char* line, TamaState* out) {
     out->askCount = n;
   } else {
     out->askId[0] = 0; out->askCount = 0;
+  }
+  JsonObject u = doc["usage"];
+  if (!u.isNull()) {
+    out->usageS5   = u["s5"]    | out->usageS5;
+    out->usageW7   = u["w7"]    | out->usageW7;
+    out->usageS5In = u["s5_in"] | out->usageS5In;
+    out->usageW7In = u["w7_in"] | out->usageW7In;
   }
   out->lastUpdated = millis();
   _lastLiveMs = millis();
