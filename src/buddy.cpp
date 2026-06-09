@@ -68,6 +68,14 @@ void buddySetCursor(int x, int y) {
 void buddySetColor(uint16_t fg)   { _tgt->setTextColor(fg, BUDDY_BG); }
 void buddyPrint(const char* s)    { _tgt->setTextSize(_scale); _tgt->print(s); }
 
+void buddyFillRect(int xc, int yt, int w, int h, uint16_t color) {
+  // Match buddyPrintSprite's vertical base so block bodies sit where the
+  // ASCII sprites do at both 1× (peek) and 2× (home).
+  int yBase = BUDDY_Y_BASE * _scale - (_scale - 1) * 14;
+  _tgt->fillRect(BUDDY_X_CENTER + xc * _scale, yBase + yt * _scale,
+                 w * _scale, h * _scale, color);
+}
+
 // ──────────────── species registry ────────────────
 extern const Species CAPYBARA_SPECIES;
 extern const Species DUCK_SPECIES;
@@ -87,13 +95,14 @@ extern const Species ROBOT_SPECIES;
 extern const Species RABBIT_SPECIES;
 extern const Species MUSHROOM_SPECIES;
 extern const Species CHONK_SPECIES;
+extern const Species CLAWD_SPECIES;
 
 static const Species* SPECIES_TABLE[] = {
   &CAPYBARA_SPECIES, &DUCK_SPECIES, &GOOSE_SPECIES, &BLOB_SPECIES,
   &CAT_SPECIES, &DRAGON_SPECIES, &OCTOPUS_SPECIES, &OWL_SPECIES,
   &PENGUIN_SPECIES, &TURTLE_SPECIES, &SNAIL_SPECIES, &GHOST_SPECIES,
   &AXOLOTL_SPECIES, &CACTUS_SPECIES, &ROBOT_SPECIES, &RABBIT_SPECIES,
-  &MUSHROOM_SPECIES, &CHONK_SPECIES,
+  &MUSHROOM_SPECIES, &CHONK_SPECIES, &CLAWD_SPECIES,
 };
 static const uint8_t N_SPECIES = sizeof(SPECIES_TABLE) / sizeof(SPECIES_TABLE[0]);
 static uint8_t currentSpeciesIdx = 0;

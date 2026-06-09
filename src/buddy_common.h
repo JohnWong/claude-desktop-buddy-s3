@@ -35,3 +35,9 @@ void buddyPrintSprite(const char* const* lines, uint8_t nLines, int yOffset, uin
 void buddySetCursor(int x, int y);
 void buddySetColor(uint16_t fg);
 void buddyPrint(const char* s);
+
+// Filled rectangle in buddy space, scale-aware. xc = signed x offset from
+// BUDDY_X_CENTER, yt = y pixels below the sprite top; both at 1× and scaled
+// to match buddyPrintSprite's body placement. For block-drawn species
+// (e.g. Clawd) whose glyphs the bitmap font can't render.
+void buddyFillRect(int xc, int yt, int w, int h, uint16_t color);
