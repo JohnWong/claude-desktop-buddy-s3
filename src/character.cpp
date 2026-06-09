@@ -139,10 +139,16 @@ static void gifDrawCb(GIFDRAW* d) {
 
 bool characterInit(const char* name) {
   if (!LittleFS.begin(false)) {
-    // begin() fails if already mounted — that's fine on reload
+    // begin() fails if already mounted — that's fine on reload. But a fresh
+    // device may have a never-formatted FS partition (this firmware shipped
+    // with ASCII species, so nothing ever wrote to it): mount-then-format on
+    // fail so the first GIF upload has somewhere to land.
     if (!LittleFS.open("/")) {
-      Serial.println("[char] LittleFS mount failed");
-      return false;
+      Serial.println("[char] LittleFS mount failed — formatting");
+      if (!LittleFS.begin(true)) {
+        Serial.println("[char] LittleFS format failed");
+        return false;
+      }
     }
   }
 
