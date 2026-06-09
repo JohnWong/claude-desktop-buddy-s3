@@ -150,12 +150,16 @@ static void sendCmd(const char* json) {
   bleWrite((const uint8_t*)json, n);
   bleWrite((const uint8_t*)"\n", 1);
 }
-const uint8_t INFO_PAGES = 7;
-// Display order → original section id (6 = USAGE). USAGE first; the old help
-// pages (ABOUT=0, BUTTONS=1) moved to the end.
-const uint8_t INFO_ORDER[INFO_PAGES] = { 6, 2, 3, 4, 5, 0, 1 };
-const uint8_t INFO_PG_BUTTONS = 6;
-const uint8_t INFO_PG_CREDITS = 4;
+const uint8_t INFO_PAGES = 7;   // total sections (INFO_ORDER size)
+// Only the first INFO_CYCLE pages auto-cycle when you tap A. BUTTONS and
+// CREDITS sit at the end as menu-only pages — the main menu's "help" and
+// "about" jump straight to them, so they no longer clutter the carousel.
+const uint8_t INFO_CYCLE = 5;
+// Display order → original section id (6 = USAGE). Cycle: USAGE, CLAUDE,
+// DEVICE, BLUETOOTH, ABOUT. Menu-only tail: BUTTONS (help), CREDITS (about).
+const uint8_t INFO_ORDER[INFO_PAGES] = { 6, 2, 3, 4, 0, 1, 5 };
+const uint8_t INFO_PG_BUTTONS = 5;   // menu "help"  → BUTTONS page
+const uint8_t INFO_PG_CREDITS = 6;   // menu "about" → CREDITS page
 
 void applyDisplayMode() {
   bool peek = displayMode != DISP_NORMAL;
@@ -596,7 +600,9 @@ static void _infoHeader(const Palette& p, int& y, const char* section, uint8_t p
   spr.setTextColor(p.text, p.bg);
   spr.setCursor(4, y); spr.print("Info");
   spr.setTextColor(p.textDim, p.bg);
-  spr.setCursor(W - 28, y); spr.printf("%u/%u", page + 1, INFO_PAGES);
+  // Menu-only pages (page >= INFO_CYCLE) aren't part of the carousel, so
+  // don't show a "x/N" counter that would read past the end.
+  if (page < INFO_CYCLE) { spr.setCursor(W - 28, y); spr.printf("%u/%u", page + 1, INFO_CYCLE); }
   y += 12;
   spr.setTextColor(p.body, p.bg);
   spr.setCursor(4, y); spr.print(section);
@@ -1400,7 +1406,9 @@ void loop() {
       menuConfirm();
     } else if (displayMode == DISP_INFO) {
       beep(2400, 30);
-      infoPage = (infoPage + 1) % INFO_PAGES;
+      // Advance within the carousel only. From a menu-only page (BUTTONS/
+      // CREDITS, index >= INFO_CYCLE) this drops back to the start of the cycle.
+      infoPage = (infoPage + 1) % INFO_CYCLE;
     } else if (displayMode == DISP_PET) {
       beep(2400, 30);
       petPage = (petPage + 1) % PET_PAGES;
