@@ -14,6 +14,7 @@ import json
 import os
 import socket
 import sys
+import time
 
 SOCK_PATH = os.path.expanduser("~/.claude-buddy/bridge.sock")
 
@@ -55,13 +56,28 @@ def main():
         except (TypeError, ValueError):
             return str(v)
 
+    def reset_in(ts):
+        # epoch → compact "Xh Ym" (or "Ym") until the limit resets; None if past/unknown.
+        try:
+            rem = int(ts) - int(time.time())
+        except (TypeError, ValueError):
+            return None
+        if rem <= 0:
+            return None
+        h, m = divmod(rem // 60, 60)
+        return f"{h}h{m:02d}m" if h else f"{m}m"
+
     model = (d.get("model") or {}).get("display_name") or (d.get("model") or {}).get("id", "")
     cwd = os.path.basename(d.get("cwd", "") or "")
     bits = []
     if model:
         bits.append(model)
     if s5p is not None:
-        bits.append(f"5h {pct(s5p)}%")
+        seg = f"5h {pct(s5p)}%"
+        r = reset_in(s5.get("resets_at"))
+        if r:
+            seg += f" (↻{r})"
+        bits.append(seg)
     if w7p is not None:
         bits.append(f"7d {pct(w7p)}%")
     if cwd:

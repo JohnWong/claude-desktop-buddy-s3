@@ -27,7 +27,7 @@ SOCK_PATH = os.path.expanduser("~/.claude-buddy/bridge.sock")
 # Wait at most this long for a device decision before falling back to the native
 # interactive prompt. Must be < the hook's timeout in settings.json.
 PERMISSION_WAIT = 40.0
-ASK_WAIT = 45.0          # per-question wait for an AskUserQuestion device pick
+ASK_WAIT = 30.0          # per-question wait for an AskUserQuestion device pick
                          # (long is fine — the "terminal" escape row falls back
                          # to the keyboard instantly; this only bounds walk-away)
 
