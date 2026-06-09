@@ -456,6 +456,46 @@ static const char* const MON[] = {
 static const char* const DOW[] = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
 
 static uint8_t clockDow() { return _clkDt.weekDay % 7; }
+
+// One merged line for the charging clock: "5h NN%  <bolt> MM%".
+// The bolt is a tiny lightning glyph (built-in font has no ⚡), green when
+// the pack reads full, otherwise body-colour while charging. Templated so
+// the portrait sprite and the landscape M5.Lcd share it.
+template <typename GFX>
+static void drawChargeLine(GFX& g, int cx, int y, const Palette& p) {
+  int vBat = (int)(compat::batVoltageV() * 1000);
+  int iBat = (int)compat::batCurrentMA();
+  int bpct = (vBat - 3200) / 10; if (bpct < 0) bpct = 0; if (bpct > 100) bpct = 100;
+  bool full = vBat > 4100 && iBat < 10;
+  uint16_t bc = full ? GREEN : p.body;
+
+  char a[12]; char b[8];
+  bool haveUsage = tama.usageS5 >= 0;
+  if (haveUsage) snprintf(a, sizeof(a), "5h %d%%", tama.usageS5);
+  snprintf(b, sizeof(b), "%d%%", bpct);
+
+  g.setTextSize(1);
+  g.setTextDatum(ML_DATUM);
+  int wa = haveUsage ? g.textWidth(a) : 0;
+  int wb = g.textWidth(b);
+  const int gap = 10, bolt = 7, bgap = 3;
+  int total = (haveUsage ? wa + gap : 0) + bolt + bgap + wb;
+  int x = cx - total / 2;
+
+  if (haveUsage) {
+    g.setTextColor(p.body, p.bg);
+    g.drawString(a, x, y);
+    x += wa + gap;
+  }
+  // bolt in [x, x+bolt], vertical centre at y
+  int bx = x + 3;
+  g.fillTriangle(bx + 2, y - 5, bx - 3, y + 1, bx,     y + 1, bc);
+  g.fillTriangle(bx,     y - 1, bx + 3, y - 1, bx - 2, y + 5, bc);
+  g.setTextColor(bc, p.bg);
+  g.drawString(b, x + bolt + bgap, y);
+  g.setTextDatum(TL_DATUM);
+}
+
 static void drawClock() {
   const Palette& p = characterPalette();
   char hm[6]; snprintf(hm, sizeof(hm), "%02u:%02u", _clkTm.hours, _clkTm.minutes);
@@ -472,12 +512,7 @@ static void drawClock() {
     spr.setTextSize(4); spr.setTextColor(p.text, p.bg);    spr.drawString(hm, CX, 140);
     spr.setTextSize(2); spr.setTextColor(p.textDim, p.bg); spr.drawString(ss, CX, 175);
     spr.setTextSize(1);                                     spr.drawString(dl, CX, 200);
-    if (tama.usageS5 >= 0) {
-      char ul[24];
-      if (tama.usageW7 >= 0) snprintf(ul, sizeof(ul), "5h %d%%  7d %d%%", tama.usageS5, tama.usageW7);
-      else                   snprintf(ul, sizeof(ul), "5h %d%%", tama.usageS5);
-      spr.setTextColor(p.body, p.bg); spr.drawString(ul, CX, 220);
-    }
+    drawChargeLine(spr, CX, 234, p);
     spr.setTextDatum(TL_DATUM);
     return;
   }
@@ -500,13 +535,7 @@ static void drawClock() {
     M5.Lcd.setTextSize(3); M5.Lcd.setTextColor(p.text, p.bg);    M5.Lcd.drawString(hm, 170, 42);
     M5.Lcd.setTextSize(2); M5.Lcd.setTextColor(p.textDim, p.bg); M5.Lcd.drawString(ssl, 170, 72);
                                                                   M5.Lcd.drawString(wdl, 170, 102);
-    M5.Lcd.setTextSize(1);
-    if (tama.usageS5 >= 0) {
-      char ul[24];
-      if (tama.usageW7 >= 0) snprintf(ul, sizeof(ul), "5h %d%%  7d %d%%", tama.usageS5, tama.usageW7);
-      else                   snprintf(ul, sizeof(ul), "5h %d%%", tama.usageS5);
-      M5.Lcd.setTextColor(p.body, p.bg); M5.Lcd.drawString(ul, 170, 122);
-    }
+    drawChargeLine(M5.Lcd, 170, 128, p);
     M5.Lcd.setTextDatum(TL_DATUM);
   }
 
@@ -624,7 +653,7 @@ void drawInfo() {
     ln("to approve from here.");
     y += 6;
     spr.setTextColor(p.textDim, p.bg);
-    ln("18 species. Settings");
+    ln("%u species. Settings", buddySpeciesCount());
     ln("> ascii pet to cycle.");
 
   } else if (sec == 1) {
