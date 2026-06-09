@@ -47,15 +47,23 @@ def main():
               "w7": w7p, "w7_reset": w7.get("resets_at")})
 
     # Print a compact, useful status line (the user had none before).
+    def pct(v):
+        # used_percentage arrives as a long float (e.g. 12.3456789); show 1dp,
+        # and drop a trailing ".0" so whole numbers read cleanly.
+        try:
+            return f"{float(v):.1f}".rstrip("0").rstrip(".")
+        except (TypeError, ValueError):
+            return str(v)
+
     model = (d.get("model") or {}).get("display_name") or (d.get("model") or {}).get("id", "")
     cwd = os.path.basename(d.get("cwd", "") or "")
     bits = []
     if model:
         bits.append(model)
     if s5p is not None:
-        bits.append(f"5h {s5p}%")
+        bits.append(f"5h {pct(s5p)}%")
     if w7p is not None:
-        bits.append(f"7d {w7p}%")
+        bits.append(f"7d {pct(w7p)}%")
     if cwd:
         bits.append(cwd)
     sys.stdout.write("  ".join(bits))
