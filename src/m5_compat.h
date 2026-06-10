@@ -7,11 +7,6 @@ using TFT_eSPI    = LovyanGFX;
 typedef m5::rtc_time_t RTC_TimeTypeDef;
 typedef m5::rtc_date_t RTC_DateTypeDef;
 
-// StickS3 red LED (active-low). Main declares its own LED_PIN const.
-#ifndef BUDDY_DEFAULT_LED_PIN
-#define BUDDY_DEFAULT_LED_PIN 19
-#endif
-
 namespace compat {
 inline void setScreenBrightness0_100(uint8_t v) {
   if (v > 100) v = 100;
