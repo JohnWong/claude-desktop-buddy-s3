@@ -976,26 +976,46 @@ static void drawUsageInfo(const Palette& p, int& y) {
 // Home usage: prominent session-5h block (label + big % + bar + reset), lower
 // half. 5h only (week 7d stays on the Info page). It clears its own area, so it
 // sits cleanly over the pet's lower body.
-static void drawUsageCorner() {
-  if (tama.usageS5 < 0) return;
+// Lower-half of the home screen: a 3-session traffic-light strip (an on-screen
+// prototype of the hardware LEDs) plus a single compact 5h-usage line tucked
+// just above the working/transcript strip.
+static void drawSessionStrip() {
   const Palette& p = characterPalette();
-  const int top = 162;   // bottom-aligned just above the HUD strip, clear of pet
-  spr.fillRect(0, top - 2, W, 46, p.bg);
+  const int top = 146;
+  spr.fillRect(0, top - 2, W, 66, p.bg);   // strip + usage line, clear of pet & HUD
   spr.setFont(&fonts::Font0);
-  char buf[16];
+  spr.setTextSize(1);
 
-  spr.setTextSize(1);
   spr.setTextColor(p.textDim, p.bg);
-  spr.setCursor(6, top); spr.print("session 5h");
-  spr.setTextSize(2);
-  spr.setTextColor(p.text, p.bg);
-  spr.setCursor(W - 52, top - 3);
-  spr.printf("%d%%", tama.usageS5);
-  spr.setTextSize(1);
-  usageBar(p, 6, top + 18, W - 12, tama.usageS5);
-  fmtDur(tama.usageS5In, buf, sizeof(buf));
-  spr.setTextColor(p.textDim, p.bg);
-  spr.setCursor(6, top + 32); spr.printf("resets in %s", buf);
+  spr.setCursor(4, top - 1); spr.print("sessions");
+
+  // Up to 3 most-recent sessions, one mini traffic light each.
+  //   state 3 = permission → red, 2 = awaiting input → yellow, 1 = running →
+  //   green, 0 = idle → all lamps dark. Only the live lamp glows, like a light.
+  static const uint16_t LAMP[3] = { 0xF800, 0xFFE0, 0x07E0 };   // red yellow green
+  static const char* const WORD[4] = { "idle", "run", "wait", "perm" };
+  for (int i = 0; i < 3; i++) {
+    int y = top + 12 + i * 13;
+    uint8_t st = (i < tama.sessCount) ? tama.sessState[i] : 0;
+    int lit = (st == 3) ? 0 : (st == 2) ? 1 : (st == 1) ? 2 : -1;
+    spr.setTextColor(p.textDim, p.bg);
+    spr.setCursor(4, y); spr.printf("%d", i + 1);
+    for (int c = 0; c < 3; c++) {
+      int cx = 22 + c * 15;
+      spr.fillCircle(cx, y + 3, 5, (c == lit) ? LAMP[c] : 0x2104);  // off = dark
+    }
+    uint16_t wc = (st == 0) ? p.textDim : LAMP[lit];
+    spr.setTextColor(wc, p.bg);
+    spr.setCursor(76, y); spr.print(WORD[st > 3 ? 0 : st]);
+  }
+
+  // Compact 5h usage, just above the working line.
+  if (tama.usageS5 >= 0) {
+    char buf[16]; fmtDur(tama.usageS5In, buf, sizeof(buf));
+    spr.setTextColor(p.body, p.bg);
+    spr.setCursor(4, top + 52);
+    spr.printf("5h %d%%  %s", tama.usageS5, buf);
+  }
 }
 
 static void drawPetStats(const Palette& p) {
@@ -1519,7 +1539,7 @@ void loop() {
     else if (clocking) drawClock();
     else if (displayMode == DISP_INFO) drawInfo();
     else if (displayMode == DISP_PET) drawPet();
-    else if (settings().hud) { drawHUD(); drawUsageCorner(); }
+    else if (settings().hud) { drawHUD(); drawSessionStrip(); }
     if (resetOpen) drawReset();
     else if (settingsOpen) drawSettings();
     else if (menuOpen) drawMenu();

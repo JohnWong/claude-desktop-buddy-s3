@@ -32,6 +32,10 @@ struct TamaState {
   int      usageW7;          // seven-day used %
   long     usageS5In;        // seconds until 5h reset
   long     usageW7In;        // seconds until 7d reset
+  // Per-session state for the on-screen traffic-light strip (≤3 recent).
+  // 0=idle/none, 1=running, 2=awaiting input, 3=needs permission.
+  uint8_t  sessState[3];
+  uint8_t  sessCount;
 };
 
 // ---------------------------------------------------------------------------
@@ -161,6 +165,22 @@ static void _applyJson(const char* line, TamaState* out) {
     out->usageS5In = u["s5_in"] | out->usageS5In;
     out->usageW7In = u["w7_in"] | out->usageW7In;
   }
+  JsonArray ss = doc["sessions"];
+  if (!ss.isNull()) {
+    uint8_t n = 0;
+    for (JsonVariant v : ss) {
+      if (n >= 3) break;
+      const char* s = v.as<const char*>();
+      uint8_t st = 0;
+      if (s) {
+        if      (!strcmp(s, "run"))  st = 1;
+        else if (!strcmp(s, "wait")) st = 2;
+        else if (!strcmp(s, "perm")) st = 3;
+      }
+      out->sessState[n++] = st;
+    }
+    out->sessCount = n;
+  }
   out->lastUpdated = millis();
   _lastLiveMs = millis();
 }
@@ -218,6 +238,7 @@ inline void dataPoll(TamaState* out) {
   out->connected = dataConnected();
   if (!out->connected) {
     out->sessionsTotal=0; out->sessionsRunning=0; out->sessionsWaiting=0;
+    out->sessCount=0;
     out->recentlyCompleted=false; out->lastUpdated=now;
     strncpy(out->msg, "No Claude connected", sizeof(out->msg)-1);
     out->msg[sizeof(out->msg)-1]=0;

@@ -196,9 +196,21 @@ def aggregate() -> dict:
     # not the persistent border (kept lightweight on purpose).
     awaiting = (running == 0 and not PENDING
                 and any(s.get("awaiting") for s in SESSIONS.values()))
+    # Per-session traffic-light strip: the 3 most-recently-seen sessions, each
+    # collapsed to one state. permission (blocked on an approval) > running >
+    # awaiting input > idle. Matches the on-device LED mapping.
+    perm_sids = {p.get("sid") for p in PENDING.values() if p.get("sid")}
+    recent = sorted(SESSIONS.items(), key=lambda kv: kv[1]["seen"], reverse=True)[:3]
+    sessions = []
+    for sid, s in recent:
+        if sid in perm_sids:        sessions.append("perm")
+        elif s["state"] == "running": sessions.append("run")
+        elif s.get("awaiting"):     sessions.append("wait")
+        else:                       sessions.append("idle")
+
     frame = {"total": total, "running": running, "waiting": waiting,
              "msg": msg, "tokens": tokens, "awaiting": awaiting,
-             "tokens_today": tokens_today()}
+             "tokens_today": tokens_today(), "sessions": sessions}
     if USAGE.get("s5") is not None or USAGE.get("w7") is not None:
         # Send remaining-seconds-to-reset (computed fresh) so the device needs
         # no clock of its own; -1 when unknown.
@@ -238,6 +250,7 @@ async def handle_conn(reader: asyncio.StreamReader, writer: asyncio.StreamWriter
                 pid = str(ev.get("id") or "")
                 if pid:
                     PENDING[pid] = {"writer": writer,
+                                    "sid": str(ev.get("sid") or ""),
                                     "tool": str(ev.get("tool", ""))[:18],
                                     "hint": str(ev.get("hint", ""))[:42]}
                     owned.add(pid)
