@@ -1428,10 +1428,25 @@ void loop() {
   clockRefreshRtc();   // 1Hz internal throttle; also caches _onUsb
   // Show the clock when nothing is happening — bridge heartbeat alone
   // doesn't count as activity (it's the only way to get the RTC synced).
-  bool clocking = displayMode == DISP_NORMAL
+  // Eligible for the charging clock: idle (no running/waiting sessions) on USB,
+  // nothing modal open, time synced. We don't switch immediately — the clock
+  // only takes over after this has held continuously for CLOCK_DELAY_MS, so a
+  // brief lull between turns doesn't bounce you off the HUD. Any activity
+  // (a session goes running/waiting, USB unplugged, a menu opens) cancels the
+  // countdown and it restarts from zero next time you go idle.
+  bool clockEligible = displayMode == DISP_NORMAL
                && !menuOpen && !settingsOpen && !resetOpen && !inPrompt
                && tama.sessionsRunning == 0 && tama.sessionsWaiting == 0
                && dataRtcValid() && _onUsb;
+  static const uint32_t CLOCK_DELAY_MS = 180000;   // 3 min idle before the clock
+  static bool     _clockTiming = false;
+  static uint32_t _clockSince  = 0;
+  if (clockEligible) {
+    if (!_clockTiming) { _clockTiming = true; _clockSince = millis(); }
+  } else {
+    _clockTiming = false;
+  }
+  bool clocking = clockEligible && (millis() - _clockSince) >= CLOCK_DELAY_MS;
   if (clocking) clockUpdateOrient();
   else { clockOrient = 0; orientFrames = 0; paintedOrient = 0; }
   bool landscapeClock = clocking && clockOrient != 0;
