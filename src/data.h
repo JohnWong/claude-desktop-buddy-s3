@@ -6,8 +6,9 @@
 
 struct TamaState {
   uint8_t  sessionsTotal;
-  uint8_t  sessionsRunning;
-  uint8_t  sessionsWaiting;
+  uint8_t  sessionsRunning;    // green:  processing
+  uint8_t  sessionsWaiting;    // yellow: awaiting your input
+  uint8_t  sessionsApproval;   // red:    needs your approval
   bool     recentlyCompleted;
   bool     nudge;            // one-shot: chime when you first become awaited
   bool     awaiting;         // persistent: Claude is idle, waiting on your input
@@ -109,6 +110,7 @@ static void _applyJson(const char* line, TamaState* out) {
   out->sessionsTotal     = doc["total"]     | out->sessionsTotal;
   out->sessionsRunning   = doc["running"]   | out->sessionsRunning;
   out->sessionsWaiting   = doc["waiting"]   | out->sessionsWaiting;
+  out->sessionsApproval  = doc["approval"]  | out->sessionsApproval;
   out->recentlyCompleted = doc["completed"] | false;
   out->nudge             = doc["nudge"] | false;
   out->awaiting          = doc["awaiting"] | false;

@@ -37,7 +37,7 @@ SOCK_PATH = os.path.join(SOCK_DIR, "bridge.sock")
 
 PUSH_PERIOD   = 2.5     # seconds between device frames (< 30s staleness window)
 SESSION_TTL   = 3600    # drop sessions with no events for this long (safety)
-RUNNING_STALE = 20      # seconds: a 'running' session whose transcript stopped updating is treated as idle (catches Esc/Ctrl-C interrupts, which fire no Stop hook)
+RUNNING_STALE = 45      # seconds: a 'running' session whose transcript stopped updating this long is treated as idle (catches Esc/Ctrl-C interrupts, which fire no Stop hook). Also the grace before a freshly-started turn is eligible for healing — so a new prompt after a long idle isn't reverted before its transcript starts moving.
 
 # session_id -> {"state": "idle"|"running"|"waiting", "label": str, "seen": ts}
 SESSIONS: dict[str, dict] = {}
@@ -149,14 +149,22 @@ def heal_stuck_running():
     seconds is therefore no longer processing → mark it idle. Only stats the file
     (cheap metadata); never reads/parses its contents. Uses wall-clock time.time()
     to match the file's mtime (NOT the monotonic 'seen' clock)."""
+    now_w = time.time()
     for s in SESSIONS.values():
         if s["state"] != "running":
             continue
         tpath = s.get("tpath")
         if not tpath:
             continue
+        # Grace: a turn that just started hasn't written its transcript yet —
+        # at UserPromptSubmit the file's mtime still reflects the PREVIOUS turn
+        # (possibly minutes ago). Don't heal until the turn has had RUNNING_STALE
+        # seconds to start writing, or every new prompt after an idle gap gets
+        # reverted to idle the instant it starts.
+        if now_w - s.get("run_at", 0) < RUNNING_STALE:
+            continue
         try:
-            if time.time() - os.path.getmtime(tpath) > RUNNING_STALE:
+            if now_w - os.path.getmtime(tpath) > RUNNING_STALE:
                 s["state"] = "idle"
         except Exception:
             pass  # file missing/unreadable → leave the session alone
@@ -186,6 +194,7 @@ def apply_event(ev: dict):
         s["state"] = "running"           # whole turn counts as busy (our redefine)
         s["awaiting"] = False            # you replied → clear the awaiting border
         s["tpath"] = ev.get("tpath", "") # transcript path → mtime-based interrupt heal
+        s["run_at"] = time.time()        # wall-clock turn start (heal grace window)
     elif evt == "idle":
         s["state"] = "idle"              # turn ended (border waits for idle_prompt)
         ONESHOT["completed"] = True      # brief celebrate, like the desktop app
@@ -202,39 +211,44 @@ def aggregate() -> dict:
     """Collapse the registry into the firmware's official schema."""
     prune()
     heal_stuck_running()
-    total   = len(SESSIONS)
-    running = sum(1 for s in SESSIONS.values() if s["state"] == "running")
-    waiting = len(PENDING)   # firmware 'waiting' = blocked on a permission prompt
+
+    # Single per-session classification, so the aggregate counts (running/
+    # waiting) and the per-session traffic-light strip can never disagree:
+    #   perm (blocked on approval) > run (processing) > wait (awaiting your
+    #   input) > idle. running counts "run"; waiting counts "wait" + "perm"
+    #   (everything that needs you).
+    perm_sids = {p.get("sid") for p in PENDING.values() if p.get("sid")}
+    def classify(sid, s):
+        if sid in perm_sids:          return "perm"
+        if s["state"] == "running":   return "run"
+        if s.get("awaiting"):         return "wait"
+        return "idle"
+    states = {sid: classify(sid, s) for sid, s in SESSIONS.items()}
+
+    total    = len(SESSIONS)
+    running  = sum(1 for v in states.values() if v == "run")    # green
+    waiting  = sum(1 for v in states.values() if v == "wait")   # yellow: awaiting input
+    approval = sum(1 for v in states.values() if v == "perm")   # red: needs approval
     if total == 0:
         msg = "no sessions"
     elif running:
-        # non-sensitive label = project dir basename of a running session
-        lbl = next((s["label"] for s in SESSIONS.values()
-                    if s["state"] == "running" and s["label"]), "")
+        lbl = next((s["label"] for sid, s in SESSIONS.items()
+                    if states[sid] == "run" and s["label"]), "")
         msg = f"working: {lbl}" if lbl else f"{running} working"
     else:
         msg = "awaiting you"
     tokens = tokens_lifetime()   # persistent → drives & restores the pet level
     # Amber border only when you're truly free — ALL sessions idle (running==0).
-    # A single session going idle while others run just gets the one-shot chime,
-    # not the persistent border (kept lightweight on purpose).
     awaiting = (running == 0 and not PENDING
                 and any(s.get("awaiting") for s in SESSIONS.values()))
-    # Per-session traffic-light strip: the 3 most-recently-seen sessions, each
-    # collapsed to one state. permission (blocked on an approval) > running >
-    # awaiting input > idle. Matches the on-device LED mapping.
-    perm_sids = {p.get("sid") for p in PENDING.values() if p.get("sid")}
+    # The 3 most-recently-seen sessions, reusing the same classification.
     recent = sorted(SESSIONS.items(), key=lambda kv: kv[1]["seen"], reverse=True)[:3]
-    sessions = []
-    for sid, s in recent:
-        if sid in perm_sids:        sessions.append("perm")
-        elif s["state"] == "running": sessions.append("run")
-        elif s.get("awaiting"):     sessions.append("wait")
-        else:                       sessions.append("idle")
+    sessions = [states[sid] for sid, _ in recent]
 
     frame = {"total": total, "running": running, "waiting": waiting,
-             "msg": msg, "tokens": tokens, "awaiting": awaiting,
-             "tokens_today": tokens_today(), "sessions": sessions}
+             "approval": approval, "msg": msg, "tokens": tokens,
+             "awaiting": awaiting, "tokens_today": tokens_today(),
+             "sessions": sessions}
     if USAGE.get("s5") is not None or USAGE.get("w7") is not None:
         # Send remaining-seconds-to-reset (computed fresh) so the device needs
         # no clock of its own; -1 when unknown.

@@ -681,8 +681,12 @@ void drawInfo() {
     _infoHeader(p, y, "CLAUDE", infoPage);
     spr.setTextColor(p.textDim, p.bg);
     ln("  sessions  %u", tama.sessionsTotal);
-    ln("  running   %u", tama.sessionsRunning);
-    ln("  waiting   %u", tama.sessionsWaiting);
+    // Colour-coded to match the home traffic lights / hardware LEDs:
+    //   running = green, awaiting (your input) = yellow, approval = red.
+    spr.setTextColor(0x07E0, p.bg); ln("  running   %u", tama.sessionsRunning);
+    spr.setTextColor(0xFFE0, p.bg); ln("  awaiting  %u", tama.sessionsWaiting);
+    spr.setTextColor(0xF800, p.bg); ln("  approval  %u", tama.sessionsApproval);
+    spr.setTextColor(p.textDim, p.bg);
     y += 8;
     spr.setTextColor(p.text, p.bg);
     ln("LINK");
