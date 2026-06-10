@@ -37,7 +37,6 @@ SOCK_PATH = os.path.join(SOCK_DIR, "bridge.sock")
 
 PUSH_PERIOD   = 2.5     # seconds between device frames (< 30s staleness window)
 SESSION_TTL   = 3600    # drop sessions with no events for this long (safety)
-RUNNING_STALE = 45      # seconds: a 'running' session whose transcript stopped updating this long is treated as idle (catches Esc/Ctrl-C interrupts, which fire no Stop hook). Also the grace before a freshly-started turn is eligible for healing — so a new prompt after a long idle isn't reverted before its transcript starts moving.
 
 # session_id -> {"state": "idle"|"running"|"waiting", "label": str, "seen": ts}
 SESSIONS: dict[str, dict] = {}
@@ -141,35 +140,6 @@ def prune():
         del SESSIONS[sid]
 
 
-def heal_stuck_running():
-    """Catch interrupted turns (Esc / Ctrl-C) that fire no Stop hook: while a turn
-    is processing Claude Code keeps writing the transcript, so its mtime advances.
-    Once a turn ends — normal OR interrupted — writes stop and the mtime goes
-    stale. A 'running' session whose transcript hasn't changed for RUNNING_STALE
-    seconds is therefore no longer processing → mark it idle. Only stats the file
-    (cheap metadata); never reads/parses its contents. Uses wall-clock time.time()
-    to match the file's mtime (NOT the monotonic 'seen' clock)."""
-    now_w = time.time()
-    for s in SESSIONS.values():
-        if s["state"] != "running":
-            continue
-        tpath = s.get("tpath")
-        if not tpath:
-            continue
-        # Grace: a turn that just started hasn't written its transcript yet —
-        # at UserPromptSubmit the file's mtime still reflects the PREVIOUS turn
-        # (possibly minutes ago). Don't heal until the turn has had RUNNING_STALE
-        # seconds to start writing, or every new prompt after an idle gap gets
-        # reverted to idle the instant it starts.
-        if now_w - s.get("run_at", 0) < RUNNING_STALE:
-            continue
-        try:
-            if now_w - os.path.getmtime(tpath) > RUNNING_STALE:
-                s["state"] = "idle"
-        except Exception:
-            pass  # file missing/unreadable → leave the session alone
-
-
 def apply_event(ev: dict):
     """Update the session registry from a hook event."""
     sid = ev.get("sid") or "?"
@@ -193,8 +163,6 @@ def apply_event(ev: dict):
     elif evt == "run":
         s["state"] = "running"           # whole turn counts as busy (our redefine)
         s["awaiting"] = False            # you replied → clear the awaiting border
-        s["tpath"] = ev.get("tpath", "") # transcript path → mtime-based interrupt heal
-        s["run_at"] = time.time()        # wall-clock turn start (heal grace window)
     elif evt == "idle":
         s["state"] = "idle"              # turn ended (border waits for idle_prompt)
         ONESHOT["completed"] = True      # brief celebrate, like the desktop app
@@ -210,7 +178,6 @@ def apply_event(ev: dict):
 def aggregate() -> dict:
     """Collapse the registry into the firmware's official schema."""
     prune()
-    heal_stuck_running()
 
     # Single per-session classification, so the aggregate counts (running/
     # waiting) and the per-session traffic-light strip can never disagree:
