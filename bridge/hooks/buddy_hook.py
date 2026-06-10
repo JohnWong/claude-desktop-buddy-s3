@@ -169,7 +169,8 @@ def main():
               "cwd": os.path.basename(data.get("cwd", "") or "")})
     elif event == "UserPromptSubmit":
         post({"evt": "run", "sid": sid,
-              "cwd": os.path.basename(data.get("cwd", "") or "")})
+              "cwd": os.path.basename(data.get("cwd", "") or ""),
+              "tpath": data.get("transcript_path", "")})
     elif event == "Stop":
         post({"evt": "idle", "sid": sid,
               "tokens": count_output_tokens(data.get("transcript_path", ""))})
