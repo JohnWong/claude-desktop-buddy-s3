@@ -150,16 +150,17 @@ static void sendCmd(const char* json) {
   bleWrite((const uint8_t*)json, n);
   bleWrite((const uint8_t*)"\n", 1);
 }
-const uint8_t INFO_PAGES = 7;   // total sections (INFO_ORDER size)
+const uint8_t INFO_PAGES = 6;   // total sections (INFO_ORDER size)
 // Only the first INFO_CYCLE pages auto-cycle when you tap A. BUTTONS and
 // CREDITS sit at the end as menu-only pages — the main menu's "help" and
-// "about" jump straight to them, so they no longer clutter the carousel.
-const uint8_t INFO_CYCLE = 5;
+// "about" jump straight to them, so they don't clutter the carousel. The
+// ABOUT page is dropped entirely (no longer in INFO_ORDER).
+const uint8_t INFO_CYCLE = 4;
 // Display order → original section id (6 = USAGE). Cycle: USAGE, CLAUDE,
-// DEVICE, BLUETOOTH, ABOUT. Menu-only tail: BUTTONS (help), CREDITS (about).
-const uint8_t INFO_ORDER[INFO_PAGES] = { 6, 2, 3, 4, 0, 1, 5 };
-const uint8_t INFO_PG_BUTTONS = 5;   // menu "help"  → BUTTONS page
-const uint8_t INFO_PG_CREDITS = 6;   // menu "about" → CREDITS page
+// DEVICE, BLUETOOTH. Menu-only tail: BUTTONS (help), CREDITS (about).
+const uint8_t INFO_ORDER[INFO_PAGES] = { 6, 2, 3, 4, 1, 5 };
+const uint8_t INFO_PG_BUTTONS = 4;   // menu "help"  → BUTTONS page
+const uint8_t INFO_PG_CREDITS = 5;   // menu "about" → CREDITS page
 
 void applyDisplayMode() {
   bool peek = displayMode != DISP_NORMAL;
@@ -1009,12 +1010,13 @@ static void drawSessionStrip() {
     spr.setCursor(76, y); spr.print(WORD[st > 3 ? 0 : st]);
   }
 
-  // Compact 5h usage on the last row, sitting right on top of the working
-  // strip (drawHUD owns y >= H-28), not grouped with the lights above.
+  // Compact 5h usage tucked right above the working/"awaiting you" line, which
+  // drawHUD prints at y = H-10. Drawn after drawHUD (dispatch order) so it lands
+  // on the freshly-cleared bottom strip rather than under the pet/lights.
   if (tama.usageS5 >= 0) {
     char buf[16]; fmtDur(tama.usageS5In, buf, sizeof(buf));
     spr.setTextColor(p.body, p.bg);
-    spr.setCursor(4, H - 30 - 8);   // just above the HUD/working strip
+    spr.setCursor(4, H - 20);   // ~y=220, one line above the working text (~230)
     spr.printf("5h %d%%  %s", tama.usageS5, buf);
   }
 }
