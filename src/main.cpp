@@ -995,7 +995,7 @@ static void drawSessionStrip() {
   static const uint16_t LAMP[3] = { 0xF800, 0xFFE0, 0x07E0 };   // red yellow green
   static const char* const WORD[4] = { "idle", "run", "wait", "perm" };
   for (int i = 0; i < 3; i++) {
-    int y = top + 12 + i * 13;
+    int y = top + 11 + i * 12;
     uint8_t st = (i < tama.sessCount) ? tama.sessState[i] : 0;
     int lit = (st == 3) ? 0 : (st == 2) ? 1 : (st == 1) ? 2 : -1;
     spr.setTextColor(p.textDim, p.bg);
@@ -1009,11 +1009,12 @@ static void drawSessionStrip() {
     spr.setCursor(76, y); spr.print(WORD[st > 3 ? 0 : st]);
   }
 
-  // Compact 5h usage, just above the working line.
+  // Compact 5h usage on the last row, sitting right on top of the working
+  // strip (drawHUD owns y >= H-28), not grouped with the lights above.
   if (tama.usageS5 >= 0) {
     char buf[16]; fmtDur(tama.usageS5In, buf, sizeof(buf));
     spr.setTextColor(p.body, p.bg);
-    spr.setCursor(4, top + 52);
+    spr.setCursor(4, H - 30 - 8);   // just above the HUD/working strip
     spr.printf("5h %d%%  %s", tama.usageS5, buf);
   }
 }
