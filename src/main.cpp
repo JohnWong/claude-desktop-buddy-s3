@@ -1018,7 +1018,10 @@ static void drawSessionStrip() {
   // on the freshly-cleared bottom strip rather than under the pet/lights.
   if (tama.usageS5 >= 0) {
     char buf[16]; fmtDur(tama.usageS5In, buf, sizeof(buf));
-    spr.setTextColor(p.body, p.bg);
+    // Same threshold colours as the usageBar: green <70%, amber 70-89%, red ≥90%.
+    int pct = tama.usageS5;
+    uint16_t uc = pct >= 90 ? RED : (pct >= 70 ? 0xFD20 : GREEN);
+    spr.setTextColor(uc, p.bg);
     spr.setCursor(4, H - 20);   // ~y=220, one line above the working text (~230)
     spr.printf("5h %d%%  %s", tama.usageS5, buf);
   }
