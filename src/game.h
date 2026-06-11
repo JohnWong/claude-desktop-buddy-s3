@@ -101,11 +101,11 @@ void gameTick() {
     float dx, dy;
     gReadAccelCalibrated(&dx, &dy);
 
-    // TUNABLE: portrait gravity sits mostly on X (vertical) and Y (horizontal).
-    // Signs negated so the ball rolls toward the LOW side (raise the left edge
-    // → ball rolls right), matching real gravity.
+    // TUNABLE axis mapping. Left/right (gVx from dy) is negated so the ball
+    // rolls toward the low side; up/down (gVy from dx) keeps its original sign
+    // (that axis was already correct).
     gVx -= dy * GAME_K;
-    gVy -= dx * GAME_K;
+    gVy += dx * GAME_K;
 
     gVx *= GAME_DAMP;
     gVy *= GAME_DAMP;
