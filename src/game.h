@@ -27,39 +27,34 @@ static const uint16_t COL_TRAP = 0xF800; // red (hole — touching resets the ba
 
 struct GameRect { int x, y, w, h; };
 
-// Serpentine maze: alternating-gap horizontal bars plus vertical stubs that
-// pinch the channels, so the ball has to weave a tighter path top -> bottom.
+// Solvable serpentine: 5 horizontal bars with alternating end-gaps (~35px),
+// no blocking stubs, so a clear weave exists top -> bottom:
+//   right gap -> left gap -> right -> left -> right gap -> goal.
 static const GameRect GAME_WALLS[] = {
-  { 0,   42, 101, 8 },   // A: gap on the right (101..135)
-  { 55,  50,   8, 40 },  //   vertical stub hanging into the A-B channel
-  { 34,  82, 101, 8 },   // B: gap on the left (0..34)
-  { 80,  90,   8, 40 },  //   stub into the B-C channel
-  { 0,  122, 101, 8 },   // C: gap on the right
-  { 47, 130,   8, 40 },  //   stub into the C-D channel
-  { 34, 162, 101, 8 },   // D: gap on the left
-  { 80, 170,   8, 40 },  //   stub into the D-E channel
-  { 0,  202,  97, 8 },   // E: gap on the right, just above the goal
+  { 0,   42, 100, 8 },   // A: gap on the right (100..135)
+  { 35,  84, 100, 8 },   // B: gap on the left (0..35)
+  { 0,  126, 100, 8 },   // C: gap on the right
+  { 35, 168, 100, 8 },   // D: gap on the left
+  { 0,  210,  95, 8 },   // E: gap on the right, above the goal
 };
 static const int GAME_WALL_N = sizeof(GAME_WALLS) / sizeof(GAME_WALLS[0]);
 
-// Traps: touching one bounces the ball back to start (timer keeps running,
-// fail counter +1). Drawn as red holes. Sit in the open part of each channel
-// so you must steer a precise lane around them.
+// Traps sit mid-channel (never in a gap), each leaving a top and bottom lane
+// to steer around — touching one buzzes, +1 fail, ball back to start.
 static const GameRect GAME_TRAPS[] = {
-  { 18,  62, 13, 13 },   // A-B channel, left side
-  { 100, 100, 13, 13 },  // B-C channel, right side
-  { 18, 140, 13, 13 },   // C-D channel, left side
-  { 102, 180, 13, 13 },  // D-E channel, right side
-  { 60, 102, 11, 11 },   // extra, mid
+  { 54,  60, 12, 12 },   // A-B channel (crossing right -> left)
+  { 62, 102, 12, 12 },   // B-C channel (left -> right)
+  { 54, 144, 12, 12 },   // C-D channel (right -> left)
+  { 62, 186, 12, 12 },   // D-E channel (left -> right)
 };
 static const int GAME_TRAP_N = sizeof(GAME_TRAPS) / sizeof(GAME_TRAPS[0]);
 
-static const GameRect GAME_GOAL = { 99, 216, 34, 20 };
+static const GameRect GAME_GOAL = { 99, 222, 34, 15 };
 
 // ---- State -----------------------------------------------------------------
 static float gBx, gBy, gVx, gVy;
-static float gSmAx, gSmAy;        // low-passed accel
-static float gAx0, gAy0;          // calibration (neutral tilt)
+static float gSmAx, gSmAy, gSmAz; // low-passed accel
+static float gAx0, gAy0, gAz0;    // calibration (neutral tilt)
 static bool  gWon = false;
 static uint32_t gWonMs = 0;
 static uint32_t gStartMs = 0;
@@ -90,13 +85,15 @@ static void gResolve(const GameRect& w) {
   }
 }
 
-static void gReadAccelCalibrated(float* dx, float* dy) {
+static void gReadAccelCalibrated(float* dx, float* dy, float* dz) {
   float ax, ay, az;
   compat::getAccel(&ax, &ay, &az);
   gSmAx = gSmAx * (1.0f - GAME_LP) + ax * GAME_LP;
   gSmAy = gSmAy * (1.0f - GAME_LP) + ay * GAME_LP;
+  gSmAz = gSmAz * (1.0f - GAME_LP) + az * GAME_LP;
   *dx = gSmAx - gAx0;
   *dy = gSmAy - gAy0;
+  *dz = gSmAz - gAz0;
 }
 
 static void gRespawn() {        // back to start, keep timer/fails/calibration
@@ -113,22 +110,22 @@ void gameInit() {
   // Seed the low-pass and capture neutral tilt as the calibration baseline.
   float ax, ay, az;
   compat::getAccel(&ax, &ay, &az);
-  gSmAx = ax; gSmAy = ay;
-  gAx0 = ax;  gAy0 = ay;
+  gSmAx = ax; gSmAy = ay; gSmAz = az;
+  gAx0 = ax;  gAy0 = ay;  gAz0 = az;
 }
 
 void gameTick() {
   lastInteractMs = millis();   // keep the device awake while playing
 
   if (!gWon) {
-    float dx, dy;
-    gReadAccelCalibrated(&dx, &dy);
+    float dx, dy, dz;
+    gReadAccelCalibrated(&dx, &dy, &dz);
 
-    // TUNABLE axis mapping. Left/right (gVx from dy) is negated so the ball
-    // rolls toward the low side; up/down (gVy from dx) keeps its original sign
-    // (that axis was already correct).
-    gVx -= dy * GAME_K;
-    gVy += dx * GAME_K;
+    // TUNABLE axis mapping. Held semi-upright, the X axis is near ±1 (saturated)
+    // so it barely tracks pitch — up/down must come from Z instead, which is the
+    // responsive axis in that pose. Left/right stays on Y (confirmed correct).
+    gVx -= dy * GAME_K;        // tilt left/right
+    gVy += dz * GAME_K;        // tilt top toward/away (pitch)
 
     gVx *= GAME_DAMP;
     gVy *= GAME_DAMP;
