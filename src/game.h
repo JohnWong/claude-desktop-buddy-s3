@@ -163,7 +163,7 @@ static int      slCredits;
 static int      slWin;              // last payout (for the result flash)
 static uint32_t slMsgMs;            // result-message timestamp
 static int      slTheme = -1;       // symbol skin (-1 = not loaded), persisted
-static const int SLOT_THEME_N = 3;  // CASINO / FRUIT / SUITS
+static const int SLOT_THEME_N = 5;  // CASINO / FRUIT / SUITS / FACES / RIDES
 
 static int gSlotLoadTheme() {
   Preferences p; p.begin("buddy", true);
@@ -327,11 +327,106 @@ static void gSym2(int cx, int cy, int idx) {
   }
 }
 
-static const char* SLOT_THEME_NAME[] = { "CASINO", "FRUIT", "SUITS" };
+// --- Theme 3: FACES (smile / grin / cry / cool / love / angry) --------------
+static void gSym3(int cx, int cy, int idx) {
+  const uint16_t F = 0xFFE0, K = 0x0000;
+  spr.fillCircle(cx, cy, 17, F);
+  spr.drawCircle(cx, cy, 17, 0xC600);
+  switch (idx) {
+    case 0: // SMILE (jackpot)
+      spr.fillCircle(cx - 6, cy - 4, 2, K); spr.fillCircle(cx + 6, cy - 4, 2, K);
+      spr.fillArc(cx, cy + 1, 6, 9, 20, 160, K);
+      break;
+    case 1: // GRIN — wide open smile
+      spr.fillCircle(cx - 6, cy - 5, 2, K); spr.fillCircle(cx + 6, cy - 5, 2, K);
+      spr.fillArc(cx, cy + 1, 2, 10, 10, 170, K);
+      break;
+    case 2: // CRY
+      spr.fillCircle(cx - 6, cy - 4, 2, K); spr.fillCircle(cx + 6, cy - 4, 2, K);
+      spr.fillArc(cx, cy + 13, 6, 9, 200, 340, K);   // frown
+      spr.fillCircle(cx - 6, cy + 3, 2, 0x051F);      // tear
+      break;
+    case 3: // COOL — sunglasses
+      spr.fillRoundRect(cx - 13, cy - 8, 10, 7, 2, K);
+      spr.fillRoundRect(cx + 3,  cy - 8, 10, 7, 2, K);
+      spr.fillRect(cx - 3, cy - 6, 6, 2, K);          // bridge
+      spr.fillArc(cx, cy + 2, 6, 9, 20, 160, K);
+      break;
+    case 4: // LOVE — heart eyes
+      for (int s = -1; s <= 1; s += 2) {
+        int ex = cx + s * 6;
+        spr.fillCircle(ex - 2, cy - 5, 2, 0xF800); spr.fillCircle(ex + 2, cy - 5, 2, 0xF800);
+        spr.fillTriangle(ex - 4, cy - 4, ex + 4, cy - 4, ex, cy, 0xF800);
+      }
+      spr.fillArc(cx, cy + 1, 6, 9, 20, 160, K);
+      break;
+    default: // ANGRY
+      spr.fillCircle(cx - 6, cy - 2, 2, K); spr.fillCircle(cx + 6, cy - 2, 2, K);
+      spr.drawLine(cx - 11, cy - 9, cx - 3, cy - 5, K);   // brows
+      spr.drawLine(cx + 11, cy - 9, cx + 3, cy - 5, K);
+      spr.fillArc(cx, cy + 14, 6, 9, 200, 340, K);        // frown
+      break;
+  }
+}
+
+// --- Theme 4: RIDES (car / bus / plane / rocket / ship / train) -------------
+static void gSym4(int cx, int cy, int idx) {
+  switch (idx) {
+    case 0: { // CAR (jackpot)
+      spr.fillRoundRect(cx - 16, cy - 2, 32, 10, 2, 0xF800);
+      spr.fillRoundRect(cx - 9, cy - 10, 18, 9, 2, 0xF800);
+      spr.fillRect(cx - 7, cy - 8, 6, 5, 0x2D7F);
+      spr.fillRect(cx + 1, cy - 8, 6, 5, 0x2D7F);
+      spr.fillCircle(cx - 9, cy + 8, 3, 0x0000); spr.fillCircle(cx + 9, cy + 8, 3, 0x0000);
+    } break;
+    case 1: { // BUS
+      spr.fillRoundRect(cx - 17, cy - 10, 34, 18, 3, 0xFD20);
+      for (int wx = -13; wx <= 8; wx += 7) spr.fillRect(cx + wx, cy - 6, 5, 5, 0x2D7F);
+      spr.fillRect(cx - 15, cy + 2, 30, 2, 0x0000);
+      spr.fillCircle(cx - 10, cy + 8, 3, 0x0000); spr.fillCircle(cx + 10, cy + 8, 3, 0x0000);
+    } break;
+    case 2: { // PLANE
+      uint16_t C = 0xFFFF;
+      spr.fillRoundRect(cx - 4, cy - 16, 8, 32, 4, C);
+      spr.fillTriangle(cx - 4, cy - 2, cx - 17, cy + 6, cx - 4, cy + 6, C);
+      spr.fillTriangle(cx + 4, cy - 2, cx + 17, cy + 6, cx + 4, cy + 6, C);
+      spr.fillTriangle(cx - 7, cy + 16, cx + 7, cy + 16, cx, cy + 10, C);
+      spr.fillCircle(cx, cy - 12, 2, 0x2D7F);
+    } break;
+    case 3: { // ROCKET
+      spr.fillTriangle(cx, cy - 18, cx - 7, cy - 4, cx + 7, cy - 4, 0xF800);
+      spr.fillRoundRect(cx - 7, cy - 4, 14, 16, 3, 0xFFFF);
+      spr.fillCircle(cx, cy + 2, 3, 0x2D7F);
+      spr.fillTriangle(cx - 7, cy + 6, cx - 14, cy + 14, cx - 7, cy + 12, 0xF800);
+      spr.fillTriangle(cx + 7, cy + 6, cx + 14, cy + 14, cx + 7, cy + 12, 0xF800);
+      spr.fillTriangle(cx - 4, cy + 12, cx + 4, cy + 12, cx, cy + 19, 0xFD20);
+    } break;
+    case 4: { // SHIP
+      spr.fillTriangle(cx - 17, cy + 4, cx + 17, cy + 4, cx + 11, cy + 13, 0xF800);
+      spr.fillTriangle(cx - 17, cy + 4, cx + 11, cy + 13, cx - 11, cy + 13, 0xF800);
+      spr.fillRect(cx - 7, cy - 6, 14, 10, 0xFFFF);
+      spr.fillRect(cx - 2, cy - 13, 5, 7, 0xFD20);
+      spr.drawLine(cx - 17, cy + 15, cx + 17, cy + 15, 0x051F);
+    } break;
+    default: { // TRAIN
+      spr.fillRoundRect(cx - 14, cy - 12, 26, 24, 3, 0x07E0);
+      spr.fillRect(cx - 10, cy - 8, 12, 8, 0x2D7F);
+      spr.fillRect(cx - 6, cy - 18, 6, 6, 0x4208);
+      spr.fillRect(cx + 12, cy - 2, 4, 12, 0x07E0);
+      spr.fillCircle(cx - 8, cy + 12, 3, 0x0000); spr.fillCircle(cx + 4, cy + 12, 3, 0x0000);
+    } break;
+  }
+}
+
+static const char* SLOT_THEME_NAME[] = { "CASINO", "FRUIT", "SUITS", "FACES", "RIDES" };
 static void gSlotSym(int cx, int cy, int idx, int theme) {
-  if (theme == 1) gSym1(cx, cy, idx);
-  else if (theme == 2) gSym2(cx, cy, idx);
-  else gSym0(cx, cy, idx);
+  switch (theme) {
+    case 1: gSym1(cx, cy, idx); break;
+    case 2: gSym2(cx, cy, idx); break;
+    case 3: gSym3(cx, cy, idx); break;
+    case 4: gSym4(cx, cy, idx); break;
+    default: gSym0(cx, cy, idx); break;
+  }
 }
 
 static void gSlotTick() {
