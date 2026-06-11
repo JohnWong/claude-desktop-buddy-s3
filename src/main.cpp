@@ -54,6 +54,7 @@ bool gameActive = false;
 void gameInit();
 void gameTick();
 void gameButtonA();
+void gameButtonB();
 void gameExit();
 uint8_t infoPage = 0;
 uint8_t petPage = 0;
@@ -1426,7 +1427,7 @@ void loop() {
   // BtnB: pet → heart
   if (M5.BtnB.wasPressed()) {
     if (swallowBtnB) { swallowBtnB = false; }
-    else if (gameActive) { gameExit(); }
+    else if (gameActive) { gameButtonB(); }
     else
     if (inAsk) {
       beep(1800, 30);
