@@ -110,8 +110,10 @@ void gameInit() {
   // Seed the low-pass and capture neutral tilt as the calibration baseline.
   float ax, ay, az;
   compat::getAccel(&ax, &ay, &az);
-  gSmAx = ax; gSmAy = ay; gSmAz = az;
-  gAx0 = ax;  gAy0 = ay;  gAz0 = az;
+  gSmAx = ax; gSmAy = ay; gSmAz = az;     // seed the low-pass
+  // Neutral = TRUE level (screen-up flat → ax=ay=0), NOT the start pose. So the
+  // ball is still when the device lies flat, and tilting it like a tray rolls it.
+  gAx0 = 0; gAy0 = 0; gAz0 = 0;
 }
 
 void gameTick() {
@@ -121,11 +123,12 @@ void gameTick() {
     float dx, dy, dz;
     gReadAccelCalibrated(&dx, &dy, &dz);
 
-    // TUNABLE axis mapping. Held semi-upright, the X axis is near ±1 (saturated)
-    // so it barely tracks pitch — up/down must come from Z instead, which is the
-    // responsive axis in that pose. Left/right stays on Y (confirmed correct).
+    // Played flat (screen up): roll tilts Y (left/right), pitch tilts X (up/down).
+    // Negated so the ball rolls toward the LOW edge. TUNABLE: if a direction is
+    // reversed, flip that line's sign.
+    (void)dz;
     gVx -= dy * GAME_K;        // tilt left/right
-    gVy += dz * GAME_K;        // tilt top toward/away (pitch)
+    gVy -= dx * GAME_K;        // tilt top up/down
 
     gVx *= GAME_DAMP;
     gVy *= GAME_DAMP;
