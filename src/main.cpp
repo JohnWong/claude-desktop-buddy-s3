@@ -86,6 +86,7 @@ static void nextPet() {
 }
 uint32_t wakeTransitionUntil = 0;
 const uint32_t SCREEN_OFF_MS = 30000;
+const uint32_t POWEROFF_MS   = 900000;   // 15 min idle on battery → full power-off
 
 bool     napping = false;
 uint32_t napStartMs = 0;
@@ -1586,6 +1587,13 @@ void loop() {
       && millis() - lastInteractMs > SCREEN_OFF_MS) {
     compat::screenPower(false);
     screenOff = true;
+  }
+
+  // Auto power-off: on battery only, fully shut down after a long idle so the
+  // pet doesn't drain the cell sitting in a drawer. Never on USB (desk buddy
+  // stays on while charging). Wake = double-press the power button.
+  if (!_onUsb && !inPrompt && millis() - lastInteractMs > POWEROFF_MS) {
+    compat::powerOff();
   }
 
   delay(screenOff ? 100 : 16);
