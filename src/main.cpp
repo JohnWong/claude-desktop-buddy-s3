@@ -55,6 +55,7 @@ void gameInit();
 void gameTick();
 void gameButtonA();
 void gameButtonB();
+void gameButtonALong();
 void gameExit();
 uint8_t infoPage = 0;
 uint8_t petPage = 0;
@@ -1354,9 +1355,9 @@ void loop() {
     btnALong = true;
     beep(800, 60);
     if (gameActive) {
-      // Long A in-game = leave the game; don't open the menu. btnALong is set
-      // above so the matching release is swallowed.
-      gameExit();
+      // Long A in-game: slots cycles its skin, otherwise leaves the game.
+      // btnALong is set above so the matching release is swallowed.
+      gameButtonALong();
     } else if (inPrompt) {
       // Hold A on an approval = ALWAYS allow (persist a rule for this tool).
       // Short A is approve-once; this is the third option without a list UI.

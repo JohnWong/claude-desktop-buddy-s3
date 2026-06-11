@@ -162,6 +162,18 @@ static uint32_t slSpinMs;           // when this spin started (for auto-stop)
 static int      slCredits;
 static int      slWin;              // last payout (for the result flash)
 static uint32_t slMsgMs;            // result-message timestamp
+static int      slTheme = -1;       // symbol skin (-1 = not loaded), persisted
+static const int SLOT_THEME_N = 3;  // CASINO / FRUIT / SUITS
+
+static int gSlotLoadTheme() {
+  Preferences p; p.begin("buddy", true);
+  int t = p.getInt("sltheme", 0); p.end();
+  return (t >= 0 && t < SLOT_THEME_N) ? t : 0;
+}
+static void gSlotSaveTheme() {
+  Preferences p; p.begin("buddy", false);
+  p.putInt("sltheme", slTheme); p.end();
+}
 
 static inline int slReelVal(int i) {
   return ((int)floorf(slPos[i] / SLOT_CELL)) % 6;
@@ -169,6 +181,7 @@ static inline int slReelVal(int i) {
 static void gSlotInit() {
   for (int i = 0; i < 3; i++) { slPos[i] = gRand(6) * SLOT_CELL; slVel[i] = 0; slSt[i] = 0; }
   slCredits = 10; slWin = 0; slMsgMs = 0; slSpinMs = 0;
+  if (slTheme < 0) slTheme = gSlotLoadTheme();
 }
 static void gSlotEvaluate() {
   int a = slReelVal(0), b = slReelVal(1), c = slReelVal(2);
@@ -193,8 +206,8 @@ static void gSlotA() {
     for (int i = 0; i < 3; i++) if (slSt[i] == 1) { slSt[i] = 2; beep(1900, 35); break; }
   }
 }
-// Draw symbol `idx` centered at (cx,cy), ~40px tall, with primitives.
-static void gSlotSym(int cx, int cy, int idx) {
+// --- Theme 0: CASINO (7 / cherry / bell / star / diamond / bar) -------------
+static void gSym0(int cx, int cy, int idx) {
   switch (idx) {
     case 0: { // SEVEN (red) — top bar + slanted leg
       uint16_t C = 0xF800;
@@ -234,6 +247,91 @@ static void gSlotSym(int cx, int cy, int idx) {
       spr.fillRect(cx - 16, cy + 9,  32, 8, C);
     } break;
   }
+}
+
+// --- Theme 1: FRUIT (watermelon / cherry / lemon / orange / grape / berry) --
+static void gSym1(int cx, int cy, int idx) {
+  switch (idx) {
+    case 0: { // WATERMELON slice (jackpot)
+      spr.fillTriangle(cx, cy - 16, cx - 17, cy + 13, cx + 17, cy + 13, 0x07E0);
+      spr.fillTriangle(cx, cy - 11, cx - 13, cy + 11, cx + 13, cy + 11, 0xF800);
+      spr.fillCircle(cx - 5, cy + 3, 1, 0x0000); spr.fillCircle(cx + 5, cy + 3, 1, 0x0000);
+      spr.fillCircle(cx, cy + 7, 1, 0x0000);
+    } break;
+    case 1: { // CHERRY
+      spr.drawLine(cx - 9, cy + 6, cx + 1, cy - 15, 0x07E0);
+      spr.drawLine(cx + 9, cy + 4, cx + 1, cy - 15, 0x07E0);
+      spr.fillCircle(cx - 9, cy + 8, 8, 0xF800);
+      spr.fillCircle(cx + 9, cy + 6, 8, 0xF800);
+      spr.fillCircle(cx - 11, cy + 5, 2, 0xFFFF);
+    } break;
+    case 2: { // LEMON
+      spr.fillEllipse(cx, cy, 16, 11, 0xFFE0);
+      spr.fillTriangle(cx - 16, cy, cx - 20, cy - 2, cx - 20, cy + 2, 0x9E60);
+      spr.fillTriangle(cx + 16, cy, cx + 20, cy - 2, cx + 20, cy + 2, 0x9E60);
+    } break;
+    case 3: { // ORANGE
+      spr.fillCircle(cx, cy, 15, 0xFD20);
+      for (int a = 0; a < 6; a++) {
+        float t = a * 1.0472f;   // 60° steps
+        spr.drawLine(cx, cy, cx + (int)(13 * cosf(t)), cy + (int)(13 * sinf(t)), 0xC300);
+      }
+    } break;
+    case 4: { // GRAPE cluster
+      const int gx[6] = {0, -7, 7, -4, 4, 0}, gy[6] = {-10, -2, -2, 6, 6, 13};
+      for (int k = 0; k < 6; k++) spr.fillCircle(cx + gx[k], cy + gy[k], 5, 0x901F);
+      spr.fillRect(cx - 1, cy - 17, 2, 5, 0x07E0);
+    } break;
+    default: { // 5 STRAWBERRY
+      spr.fillTriangle(cx, cy + 16, cx - 13, cy - 5, cx + 13, cy - 5, 0xF800);
+      spr.fillTriangle(cx, cy - 13, cx - 11, cy - 3, cx + 11, cy - 3, 0x07E0);
+      spr.fillCircle(cx - 5, cy + 2, 1, 0xFFE0); spr.fillCircle(cx + 5, cy + 2, 1, 0xFFE0);
+      spr.fillCircle(cx, cy + 8, 1, 0xFFE0);
+    } break;
+  }
+}
+
+// --- Theme 2: SUITS (heart / spade / diamond / club / star / 7) -------------
+static void gSym2(int cx, int cy, int idx) {
+  switch (idx) {
+    case 0: { // HEART (jackpot)
+      spr.fillCircle(cx - 7, cy - 5, 8, 0xF800);
+      spr.fillCircle(cx + 7, cy - 5, 8, 0xF800);
+      spr.fillTriangle(cx - 14, cy - 1, cx + 14, cy - 1, cx, cy + 16, 0xF800);
+    } break;
+    case 1: { // SPADE (white)
+      spr.fillCircle(cx - 7, cy + 3, 8, 0xFFFF);
+      spr.fillCircle(cx + 7, cy + 3, 8, 0xFFFF);
+      spr.fillTriangle(cx - 14, cy + 7, cx + 14, cy + 7, cx, cy - 16, 0xFFFF);
+      spr.fillTriangle(cx - 6, cy + 17, cx + 6, cy + 17, cx, cy + 4, 0xFFFF);
+    } break;
+    case 2: { // DIAMOND (red)
+      spr.fillTriangle(cx, cy - 17, cx - 13, cy, cx + 13, cy, 0xF800);
+      spr.fillTriangle(cx, cy + 17, cx - 13, cy, cx + 13, cy, 0xF800);
+    } break;
+    case 3: { // CLUB (white)
+      spr.fillCircle(cx, cy - 7, 7, 0xFFFF);
+      spr.fillCircle(cx - 8, cy + 3, 7, 0xFFFF);
+      spr.fillCircle(cx + 8, cy + 3, 7, 0xFFFF);
+      spr.fillTriangle(cx - 6, cy + 17, cx + 6, cy + 17, cx, cy + 2, 0xFFFF);
+    } break;
+    case 4: { // STAR (yellow)
+      spr.fillTriangle(cx, cy - 18, cx - 16, cy + 9, cx + 16, cy + 9, 0xFFE0);
+      spr.fillTriangle(cx, cy + 18, cx - 16, cy - 9, cx + 16, cy - 9, 0xFFE0);
+    } break;
+    default: { // 5 SEVEN (red)
+      spr.fillRect(cx - 14, cy - 18, 28, 7, 0xF800);
+      spr.fillTriangle(cx + 14, cy - 11, cx + 4, cy - 11, cx - 7, cy + 18, 0xF800);
+      spr.fillTriangle(cx + 14, cy - 11, cx - 7, cy + 18, cx + 3, cy + 18, 0xF800);
+    } break;
+  }
+}
+
+static const char* SLOT_THEME_NAME[] = { "CASINO", "FRUIT", "SUITS" };
+static void gSlotSym(int cx, int cy, int idx, int theme) {
+  if (theme == 1) gSym1(cx, cy, idx);
+  else if (theme == 2) gSym2(cx, cy, idx);
+  else gSym0(cx, cy, idx);
 }
 
 static void gSlotTick() {
@@ -279,7 +377,7 @@ static void gSlotTick() {
     for (int k = -1; k <= 1; k++) {                // symbols covering the window
       int idx = ((base - k) % 6 + 6) % 6;
       int cy = y0 + bh / 2 + (int)shift + k * (int)SLOT_CELL;
-      gSlotSym(x + bw / 2, cy, idx);
+      gSlotSym(x + bw / 2, cy, idx, slTheme);
     }
     spr.clearClipRect();
     // window frame + center payline + spin highlight
@@ -302,9 +400,12 @@ static void gSlotTick() {
   } else {
     spr.setTextSize(1); spr.setTextColor(0x8410, 0x0008);
     spr.setCursor(10, LH - 14);
-    spr.print(anySpin ? "A: stop reel    B: back    (turn sideways)"
-                      : "A: spin    B: back    (turn sideways)");
+    spr.print(anySpin ? "A: stop reel   B: back   hold A: skin"
+                      : "A: spin   B: back   hold A: skin");
   }
+  // current skin name, top-right under credits
+  spr.setTextSize(1); spr.setTextColor(0x07FF, 0x0008);
+  spr.setCursor(LW - 78, 18); spr.printf("skin: %s", SLOT_THEME_NAME[slTheme]);
   spr.setRotation(0);   // restore for the rest of the system
 }
 
@@ -489,3 +590,12 @@ void gameButtonB() {             // B
   }
 }
 void gameExit() { gameActive = false; beep(900, 60); }
+void gameButtonALong() {         // long A
+  // In slots, long-press cycles the symbol skin; everywhere else it exits.
+  if (gScreen == GS_PLAY && gGame == 1) {
+    slTheme = (slTheme + 1) % SLOT_THEME_N; gSlotSaveTheme();
+    beep(2600, 50); beep(3000, 70);
+  } else {
+    gameExit();
+  }
+}
