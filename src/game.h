@@ -144,9 +144,8 @@ static void gMazeTick() {
 // ===========================================================================
 // Game 2 — Slot machine (老虎机). A = spin / skill-stop each reel; B = back.
 // ===========================================================================
-// 6 symbols; "7" is the jackpot. Drawn as a big letter on a colored chip.
-static const char     SLOT_SYM[6]  = { '7', '$', 'B', 'C', '*', '#' };
-static const uint16_t SLOT_COL[6]  = { 0xF800, 0x07E0, 0xFD20, 0xF81F, 0x07FF, 0xFFFF };
+// 6 graphic symbols; index 0 (SEVEN) is the jackpot.
+//   0 SEVEN  1 CHERRY  2 BELL  3 STAR  4 DIAMOND  5 BAR
 static int      slReel[3];          // current symbol per reel
 static bool     slSpin[3];          // reel still spinning?
 static int      slCredits;
@@ -182,38 +181,93 @@ static void gSlotA() {
     if (!(slSpin[0] || slSpin[1] || slSpin[2])) gSlotEvaluate();
   }
 }
+// Draw symbol `idx` centered at (cx,cy), ~40px tall, with primitives.
+static void gSlotSym(int cx, int cy, int idx) {
+  switch (idx) {
+    case 0: { // SEVEN (red) — top bar + slanted leg
+      uint16_t C = 0xF800;
+      spr.fillRect(cx - 14, cy - 18, 28, 7, C);
+      spr.fillTriangle(cx + 14, cy - 11, cx + 4, cy - 11, cx - 7, cy + 18, C);
+      spr.fillTriangle(cx + 14, cy - 11, cx - 7, cy + 18, cx + 3, cy + 18, C);
+    } break;
+    case 1: { // CHERRY (red on green stems)
+      spr.drawLine(cx - 9, cy + 6, cx + 1, cy - 15, 0x07E0);
+      spr.drawLine(cx + 9, cy + 4, cx + 1, cy - 15, 0x07E0);
+      spr.fillCircle(cx - 9, cy + 8, 8, 0xF800);
+      spr.fillCircle(cx + 9, cy + 6, 8, 0xF800);
+      spr.fillCircle(cx - 11, cy + 5, 2, 0xFFFF);
+    } break;
+    case 2: { // BELL (gold)
+      uint16_t C = 0xFD20;
+      spr.fillCircle(cx, cy - 15, 3, C);
+      spr.fillTriangle(cx, cy - 14, cx - 15, cy + 10, cx + 15, cy + 10, C);
+      spr.fillRect(cx - 16, cy + 9, 32, 5, C);
+      spr.fillCircle(cx, cy + 16, 3, C);
+    } break;
+    case 3: { // STAR (yellow) — two overlapping triangles
+      uint16_t C = 0xFFE0;
+      spr.fillTriangle(cx, cy - 18, cx - 16, cy + 9, cx + 16, cy + 9, C);
+      spr.fillTriangle(cx, cy + 18, cx - 16, cy - 9, cx + 16, cy - 9, C);
+    } break;
+    case 4: { // DIAMOND (cyan)
+      uint16_t C = 0x07FF;
+      spr.fillTriangle(cx, cy - 18, cx - 15, cy, cx + 15, cy, C);
+      spr.fillTriangle(cx, cy + 18, cx - 15, cy, cx + 15, cy, C);
+      spr.drawLine(cx - 7, cy - 9, cx + 6, cy - 9, 0xFFFF);
+    } break;
+    default: { // 5 BAR (green) — three stacked bars
+      uint16_t C = 0x07E0;
+      spr.fillRect(cx - 16, cy - 17, 32, 8, C);
+      spr.fillRect(cx - 16, cy - 4,  32, 8, C);
+      spr.fillRect(cx - 16, cy + 9,  32, 8, C);
+    } break;
+  }
+}
+
 static void gSlotTick() {
   if ((slSpin[0] || slSpin[1] || slSpin[2]) && millis() - slStep > 55) {
     slStep = millis();
     for (int i = 0; i < 3; i++) if (slSpin[i]) slReel[i] = (slReel[i] + 1) % 6;
   }
-  spr.fillSprite(COL_BG);
-  spr.setTextColor(COL_HUD, COL_BG); spr.setTextSize(1);
-  spr.setCursor(8, 8);  spr.print("SLOTS");
-  spr.setCursor(8, 22); spr.printf("credits %d", slCredits);
+  bool anySpin = slSpin[0] || slSpin[1] || slSpin[2];
 
-  const int bw = 38, bh = 54, gap = 4;
-  const int total = bw * 3 + gap * 2, x0 = (W - total) / 2, y0 = 88;
+  // Landscape, full-screen: draw into the sprite rotated 90° (logical 240x135),
+  // then restore rotation so the main loop's pushSprite presents it as-is.
+  spr.setRotation(1);
+  const int LW = 240, LH = 135;
+  spr.fillSprite(0x0008);                          // deep blue felt
+  spr.setTextSize(1); spr.setTextColor(0xFFE0, 0x0008);
+  spr.setCursor(10, 8);  spr.print("S L O T S");
+  spr.setTextColor(COL_HUD, 0x0008);
+  spr.setCursor(LW - 78, 8); spr.printf("credits %d", slCredits);
+
+  const int bw = 60, bh = 84, gap = 12;
+  const int total = bw * 3 + gap * 2, x0 = (LW - total) / 2, y0 = 26;
   for (int i = 0; i < 3; i++) {
     int x = x0 + i * (bw + gap);
-    spr.fillRoundRect(x, y0, bw, bh, 4, 0x18E3);
-    spr.drawRoundRect(x, y0, bw, bh, 4, slSpin[i] ? 0xFFE0 : 0x4208);
-    int s = slReel[i];
-    spr.setTextColor(SLOT_COL[s], 0x18E3);
-    spr.setTextSize(4);
-    spr.setCursor(x + bw/2 - 11, y0 + bh/2 - 14);
-    spr.print(SLOT_SYM[s]);
+    spr.fillRoundRect(x, y0, bw, bh, 6, 0x18E3);
+    spr.drawRoundRect(x, y0, bw, bh, 6, slSpin[i] ? 0xFFE0 : 0x4208);
+    if (slSpin[i]) spr.drawRoundRect(x + 1, y0 + 1, bw - 2, bh - 2, 6, 0xFFE0);
+    gSlotSym(x + bw / 2, y0 + bh / 2, slReel[i]);
   }
-  spr.setTextSize(1);
-  bool anySpin = slSpin[0] || slSpin[1] || slSpin[2];
+
   if (slMsgMs && millis() - slMsgMs < 2500 && !anySpin) {
-    if (slWin > 0) { spr.setTextColor(COL_GOAL, COL_BG); spr.setCursor(W/2 - 30, 160);
-                     spr.printf(slWin >= 50 ? "JACKPOT +%d" : "WIN +%d", slWin); }
-    else { spr.setTextColor(0xF800, COL_BG); spr.setCursor(W/2 - 18, 160); spr.print("no win"); }
+    spr.setTextSize(2);
+    if (slWin > 0) {
+      spr.setTextColor(slWin >= 50 ? 0xFFE0 : COL_GOAL, 0x0008);
+      char buf[20]; snprintf(buf, sizeof(buf), slWin >= 50 ? "JACKPOT +%d" : "WIN +%d", slWin);
+      spr.setCursor(LW / 2 - (int)strlen(buf) * 6, LH - 26); spr.print(buf);
+    } else {
+      spr.setTextColor(0xF800, 0x0008);
+      spr.setCursor(LW / 2 - 36, LH - 26); spr.print("NO WIN");
+    }
+  } else {
+    spr.setTextSize(1); spr.setTextColor(0x8410, 0x0008);
+    spr.setCursor(10, LH - 14);
+    spr.print(anySpin ? "A: stop reel    B: back    (turn sideways)"
+                      : "A: spin    B: back    (turn sideways)");
   }
-  spr.setTextColor(0x8410, COL_BG);
-  spr.setCursor(6, H - 16);
-  spr.print(anySpin ? "A:stop  B:back" : "A:spin  B:back");
+  spr.setRotation(0);   // restore for the rest of the system
 }
 
 // ===========================================================================
@@ -246,6 +300,26 @@ static void gRaceSpawn() {
     return;
   }
 }
+// A little top-down car: body + cabin glass + four black wheels poking out.
+// `down` = facing down (enemies); else facing up (player) — moves the cabin/
+// windshield to the leading end.
+static void gRaceCar(int x, int y, uint16_t body, bool down) {
+  const int w = RACE_PW, h = RACE_PH;
+  // wheels (front + rear pairs)
+  spr.fillRect(x - 2,     y + h / 6,     3, h / 4, 0x0000);
+  spr.fillRect(x + w - 1, y + h / 6,     3, h / 4, 0x0000);
+  spr.fillRect(x - 2,     y + h - h/6 - h/4, 3, h / 4, 0x0000);
+  spr.fillRect(x + w - 1, y + h - h/6 - h/4, 3, h / 4, 0x0000);
+  // body
+  spr.fillRoundRect(x, y, w, h, 4, body);
+  spr.drawRoundRect(x, y, w, h, 4, 0x0000);
+  // cabin glass toward the travel (leading) end
+  int cy = down ? (y + h - 11) : (y + 3);
+  spr.fillRoundRect(x + 3, cy, w - 6, 8, 2, 0x2D7F);   // bluish windshield
+  // a small roof slit behind the cabin
+  spr.fillRect(x + 4, down ? cy - 5 : cy + 9, w - 8, 3, 0x18C3);
+}
+
 static void gRaceTick() {
   float ax, ay, az; compat::getAccel(&ax, &ay, &az); (void)ax; (void)az;
   if (!rOver) {
@@ -277,11 +351,11 @@ static void gRaceTick() {
   // dashed center line scrolling for a sense of speed
   for (int y = (int)rScroll - 28; y < H; y += 28)
     spr.fillRect(W/2 - 2, y, 4, 14, 0xCE59);
-  // enemies (red cars)
+  // enemies (red cars, facing down toward you)
   for (int i = 0; i < RACE_MAXE; i++) if (rEnemy[i].active)
-    spr.fillRoundRect((int)rEnemy[i].x, (int)rEnemy[i].y, RACE_PW, RACE_PH, 3, 0xF800);
-  // player (yellow car)
-  spr.fillRoundRect((int)rPx, RACE_PY, RACE_PW, RACE_PH, 3, 0xFFE0);
+    gRaceCar((int)rEnemy[i].x, (int)rEnemy[i].y, 0xF800, true);
+  // player (yellow car, facing up)
+  gRaceCar((int)rPx, RACE_PY, 0xFFE0, false);
 
   spr.setTextSize(1); spr.setTextColor(COL_HUD, 0x2104);
   spr.setCursor(4, 4); spr.printf("score %d", rScore);
@@ -298,22 +372,25 @@ static void gRaceTick() {
 // ===========================================================================
 // Picker + dispatcher
 // ===========================================================================
+// Picker rows = the games plus a trailing EXIT entry.
+static const int PICK_N = GAME_N + 1;   // ..., EXIT
 static void gDrawPicker() {
   spr.fillSprite(COL_BG);
   spr.setTextColor(COL_HUD, COL_BG); spr.setTextSize(2);
-  spr.setCursor(18, 26); spr.print("GAMES");
+  spr.setCursor(18, 22); spr.print("GAMES");
   spr.setTextSize(2);
-  for (int i = 0; i < GAME_N; i++) {
+  for (int i = 0; i < PICK_N; i++) {
     bool sel = (i == gSel);
-    int y = 80 + i * 34;
-    if (sel) { spr.fillRoundRect(10, y - 4, W - 20, 28, 4, 0x2945);
-               spr.setTextColor(0xFFE0, 0x2945); }
-    else spr.setTextColor(0x8410, COL_BG);
-    spr.setCursor(24, y); spr.print(sel ? "> " : "  "); spr.print(GAME_NAMES[i]);
+    bool exit = (i == GAME_N);
+    int y = 68 + i * 32;
+    if (sel) { spr.fillRoundRect(10, y - 4, W - 20, 26, 4, exit ? 0x4000 : 0x2945);
+               spr.setTextColor(0xFFE0, exit ? 0x4000 : 0x2945); }
+    else spr.setTextColor(exit ? 0xC986 : 0x8410, COL_BG);
+    spr.setCursor(24, y); spr.print(sel ? "> " : "  ");
+    spr.print(exit ? "EXIT" : GAME_NAMES[i]);
   }
   spr.setTextSize(1); spr.setTextColor(0x8410, COL_BG);
-  spr.setCursor(10, H - 28); spr.print("A:next  B:play");
-  spr.setCursor(10, H - 16); spr.print("hold A: exit");
+  spr.setCursor(10, H - 16); spr.print("A:next   B:select");
 }
 
 void gameInit() {
@@ -330,11 +407,12 @@ void gameTick() {
   }
 }
 void gameButtonA() {              // short A
-  if (gScreen == GS_PICKER) { gSel = (gSel + 1) % GAME_N; beep(1800, 30); return; }
+  if (gScreen == GS_PICKER) { gSel = (gSel + 1) % PICK_N; beep(1800, 30); return; }
   switch (gGame) { case 0: gMazeA(); break; case 1: gSlotA(); break; case 2: gRaceA(); break; }
 }
 void gameButtonB() {             // B
   if (gScreen == GS_PICKER) {
+    if (gSel == GAME_N) { gameExit(); return; }   // EXIT row
     gGame = gSel; gScreen = GS_PLAY; beep(2400, 40);
     switch (gGame) { case 0: gMazeInit(); break; case 1: gSlotInit(); break; case 2: gRaceInit(); break; }
   } else {
