@@ -278,7 +278,13 @@ static const int   RACE_LX = 14, RACE_RX = 121;   // road edges
 static const int   RACE_PW = 20, RACE_PH = 28;    // player car size
 static const int   RACE_PY = H - 44;              // player y (fixed)
 static const int   RACE_MAXE = 4;
-struct RaceCar { float x, y; bool active; };
+// Enemy paint jobs: body color + deco style (0 plain, 1 racing stripes,
+// 2 contrast roof). Picked at spawn so the road has a mix of cars.
+static const uint16_t RACE_PAL[] = {
+  0xF800, 0x051F, 0x780F, 0xFC00, 0x07FF, 0xFFFF, 0xA145,
+};
+static const int RACE_PAL_N = sizeof(RACE_PAL) / sizeof(RACE_PAL[0]);
+struct RaceCar { float x, y; bool active; uint16_t color; uint8_t deco; };
 static float    rPx, rPvx;
 static RaceCar  rEnemy[RACE_MAXE];
 static int      rScore;
@@ -297,13 +303,15 @@ static void gRaceSpawn() {
     rEnemy[i].active = true;
     rEnemy[i].x = RACE_LX + gRand(RACE_RX - RACE_LX - RACE_PW);
     rEnemy[i].y = -RACE_PH;
+    rEnemy[i].color = RACE_PAL[gRand(RACE_PAL_N)];
+    rEnemy[i].deco  = (uint8_t)gRand(3);
     return;
   }
 }
 // A little top-down car: body + cabin glass + four black wheels poking out.
 // `down` = facing down (enemies); else facing up (player) — moves the cabin/
 // windshield to the leading end.
-static void gRaceCar(int x, int y, uint16_t body, bool down) {
+static void gRaceCar(int x, int y, uint16_t body, bool down, uint8_t deco) {
   const int w = RACE_PW, h = RACE_PH;
   // wheels (front + rear pairs)
   spr.fillRect(x - 2,     y + h / 6,     3, h / 4, 0x0000);
@@ -313,17 +321,22 @@ static void gRaceCar(int x, int y, uint16_t body, bool down) {
   // body
   spr.fillRoundRect(x, y, w, h, 4, body);
   spr.drawRoundRect(x, y, w, h, 4, 0x0000);
+  // deco 1: two racing stripes running down the hood
+  if (deco == 1) {
+    spr.fillRect(x + w / 2 - 4, y + 2, 3, h - 4, 0xFFFF);
+    spr.fillRect(x + w / 2 + 1, y + 2, 3, h - 4, 0xFFFF);
+  }
   // cabin glass toward the travel (leading) end
   int cy = down ? (y + h - 11) : (y + 3);
   spr.fillRoundRect(x + 3, cy, w - 6, 8, 2, 0x2D7F);   // bluish windshield
-  // a small roof slit behind the cabin
-  spr.fillRect(x + 4, down ? cy - 5 : cy + 9, w - 8, 3, 0x18C3);
+  // roof slit behind the cabin — deco 2 paints it a contrasting white
+  spr.fillRect(x + 4, down ? cy - 5 : cy + 9, w - 8, 3, deco == 2 ? 0xFFFF : 0x18C3);
 }
 
 static void gRaceTick() {
   float ax, ay, az; compat::getAccel(&ax, &ay, &az); (void)ax; (void)az;
   if (!rOver) {
-    rPvx = rPvx * 0.8f + ay * RACE_STEER;       // tilt -> steer
+    rPvx = rPvx * 0.8f - ay * RACE_STEER;       // tilt -> steer (toward the low side)
     rPx += rPvx;
     if (rPx < RACE_LX) { rPx = RACE_LX; rPvx = 0; }
     if (rPx > RACE_RX - RACE_PW) { rPx = RACE_RX - RACE_PW; rPvx = 0; }
@@ -351,11 +364,11 @@ static void gRaceTick() {
   // dashed center line scrolling for a sense of speed
   for (int y = (int)rScroll - 28; y < H; y += 28)
     spr.fillRect(W/2 - 2, y, 4, 14, 0xCE59);
-  // enemies (red cars, facing down toward you)
+  // enemies (assorted paint jobs, facing down toward you)
   for (int i = 0; i < RACE_MAXE; i++) if (rEnemy[i].active)
-    gRaceCar((int)rEnemy[i].x, (int)rEnemy[i].y, 0xF800, true);
-  // player (yellow car, facing up)
-  gRaceCar((int)rPx, RACE_PY, 0xFFE0, false);
+    gRaceCar((int)rEnemy[i].x, (int)rEnemy[i].y, rEnemy[i].color, true, rEnemy[i].deco);
+  // player (yellow car with racing stripes, facing up)
+  gRaceCar((int)rPx, RACE_PY, 0xFFE0, false, 1);
 
   spr.setTextSize(1); spr.setTextColor(COL_HUD, 0x2104);
   spr.setCursor(4, 4); spr.printf("score %d", rScore);
