@@ -48,6 +48,13 @@ bool    btnALong    = false;
 
 enum DisplayMode { DISP_NORMAL, DISP_PET, DISP_INFO, DISP_COUNT };
 uint8_t displayMode = DISP_NORMAL;
+bool gameActive = false;
+// Defined in game.h (included before setup); forward-declared so the menu/button
+// hooks above that include point can reference them.
+void gameInit();
+void gameTick();
+void gameButtonA();
+void gameExit();
 uint8_t infoPage = 0;
 uint8_t petPage = 0;
 const uint8_t PET_PAGES = 2;
@@ -175,8 +182,8 @@ void applyDisplayMode() {
   characterInvalidate();  // redraws character on next tick (text mode path)
 }
 
-const char* menuItems[] = { "settings", "turn off", "help", "about", "demo", "close" };
-const uint8_t MENU_N = 6;
+const char* menuItems[] = { "settings", "turn off", "help", "about", "demo", "game", "close" };
+const uint8_t MENU_N = 7;
 
 bool    settingsOpen = false;
 uint8_t settingsSel  = 0;
@@ -355,7 +362,8 @@ void menuConfirm() {
       characterInvalidate();
       break;
     case 4: dataSetDemo(!dataDemo()); break;
-    case 5: menuOpen = false; characterInvalidate(); break;
+    case 5: menuOpen = false; gameActive = true; gameInit(); break;
+    case 6: menuOpen = false; characterInvalidate(); break;
   }
 }
 
@@ -879,7 +887,7 @@ static void drawApproval() {
     // No physical LED on StickS3 — pulse a red border while the prompt is
     // unanswered so it's noticeable from across the room. ~1Hz blink, drawn
     // last so it sits on top of everything; thin enough not to cover the text.
-    if ((millis() / 500) % 2 == 0) {
+    if (!gameActive && (millis() / 500) % 2 == 0) {
       for (int i = 0; i < 3; i++)
         spr.drawRect(i, i, W - 2 * i, H - 2 * i, 0xF800);   // red
     }
@@ -1182,6 +1190,8 @@ void drawHUD() {
   }
 }
 
+#include "game.h"
+
 void setup() {
   auto cfg = M5.config();
   M5.begin(cfg);
@@ -1342,7 +1352,11 @@ void loop() {
   if (M5.BtnA.pressedFor(600) && !btnALong && !swallowBtnA) {
     btnALong = true;
     beep(800, 60);
-    if (inPrompt) {
+    if (gameActive) {
+      // Long A in-game = leave the game; don't open the menu. btnALong is set
+      // above so the matching release is swallowed.
+      gameExit();
+    } else if (inPrompt) {
       // Hold A on an approval = ALWAYS allow (persist a rule for this tool).
       // Short A is approve-once; this is the third option without a list UI.
       char cmd[96];
@@ -1366,7 +1380,9 @@ void loop() {
   }
   if (M5.BtnA.wasReleased()) {
     if (!btnALong && !swallowBtnA) {
-      if (inAsk) {
+      if (gameActive) {
+        gameButtonA();   // short A in-game = restart the level
+      } else if (inAsk) {
         // Pick the highlighted option. The last row (index == askCount) is the
         // "terminal" escape → tell the bridge to fall back to the native picker.
         uint8_t idx = (askSel >= tama.askCount) ? 255 : askSel;
@@ -1410,6 +1426,7 @@ void loop() {
   // BtnB: pet → heart
   if (M5.BtnB.wasPressed()) {
     if (swallowBtnB) { swallowBtnB = false; }
+    else if (gameActive) { gameExit(); }
     else
     if (inAsk) {
       beep(1800, 30);
@@ -1510,7 +1527,9 @@ void loop() {
   if (pk && !lastPasskey) { wake(); beep(1800, 60); }
   lastPasskey = pk;
 
-  if (napping || screenOff || landscapeClock) {
+  if (gameActive) {
+    gameTick();   // owns the full sprite while playing
+  } else if (napping || screenOff || landscapeClock) {
     // skip sprite render — face-down, powered off, or landscape clock
     // (which draws direct-to-LCD below)
   } else if (buddyMode) {
@@ -1542,6 +1561,9 @@ void loop() {
   }
   if (landscapeClock) {
     drawClock();
+  } else if (gameActive) {
+    // Game drew the whole sprite in gameTick(); just present it, no overlays.
+    spr.pushSprite(0, 0);
   } else if (!napping && !screenOff) {
     if (blePasskey()) drawPasskey();
     else if (tama.askId[0] && !askResponseSent) drawAsk();
@@ -1554,7 +1576,7 @@ void loop() {
     else if (menuOpen) drawMenu();
     // Awaiting-your-input: calm amber breathing border (no physical LED on S3).
     if (tama.awaiting && !tama.promptId[0]
-        && !menuOpen && !settingsOpen && !resetOpen) {
+        && !menuOpen && !settingsOpen && !resetOpen && !gameActive) {
       drawAwaitingBorder();
     }
     spr.pushSprite(0, 0);
