@@ -11,11 +11,11 @@
 extern bool gameActive;
 
 // ---- Tunables (file-static so they're easy to tweak later) -----------------
-static const float GAME_K       = 0.6f;   // tilt -> acceleration gain
+static const float GAME_K       = 0.85f;  // tilt -> acceleration gain (sensitivity)
 static const float GAME_DAMP    = 0.92f;  // per-frame velocity damping
-static const float GAME_LP      = 0.4f;   // accel low-pass: smoothed = old*0.6 + raw*0.4
+static const float GAME_LP      = 0.5f;   // accel low-pass: smoothed = old*0.5 + raw*0.5
 static const float GAME_R       = 4.0f;   // ball radius (px)
-static const float GAME_VMAX    = 4.0f;   // velocity clamp (px/frame)
+static const float GAME_VMAX    = 5.5f;   // velocity clamp (px/frame)
 static const uint32_t GAME_WIN_MS = 1500; // auto-restart delay after a win
 
 static const uint16_t COL_WALL = 0x2104; // dark
@@ -102,9 +102,10 @@ void gameTick() {
     gReadAccelCalibrated(&dx, &dy);
 
     // TUNABLE: portrait gravity sits mostly on X (vertical) and Y (horizontal).
-    // First-guess mapping; the user may want a sign flip or an axis swap.
-    gVx += dy * GAME_K;
-    gVy += dx * GAME_K;
+    // Signs negated so the ball rolls toward the LOW side (raise the left edge
+    // → ball rolls right), matching real gravity.
+    gVx -= dy * GAME_K;
+    gVy -= dx * GAME_K;
 
     gVx *= GAME_DAMP;
     gVy *= GAME_DAMP;
