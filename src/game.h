@@ -273,7 +273,7 @@ static void gSlotTick() {
 // ===========================================================================
 // Game 3 — Tilt-to-steer racer (赛车超车). Hold upright; tilt L/R to dodge.
 // ===========================================================================
-static const float RACE_STEER = 4.0f;   // tilt sensitivity (flip sign if mirrored)
+static const float RACE_STEER = 6.0f;   // tilt sensitivity; steady-state max px/frame = 5*RACE_STEER*ay
 static const int   RACE_LX = 14, RACE_RX = 121;   // road edges
 static const int   RACE_PW = 20, RACE_PH = 28;    // player car size
 static const int   RACE_PY = H - 44;              // player y (fixed)
@@ -288,13 +288,24 @@ struct RaceCar { float x, y; bool active; uint16_t color; uint8_t deco; };
 static float    rPx, rPvx;
 static RaceCar  rEnemy[RACE_MAXE];
 static int      rScore;
+static int      rHigh = -1;   // best score, persisted in NVS (-1 = not loaded)
 static bool     rOver;
 static uint32_t rSpawnMs, rScroll;
+
+static int gRaceLoadHigh() {
+  Preferences p; p.begin("buddy", true);
+  int h = p.getInt("racehi", 0); p.end(); return h;
+}
+static void gRaceSaveHigh(int h) {
+  Preferences p; p.begin("buddy", false);
+  p.putInt("racehi", h); p.end();
+}
 
 static void gRaceInit() {
   rPx = (RACE_LX + RACE_RX - RACE_PW) / 2.0f; rPvx = 0;
   for (int i = 0; i < RACE_MAXE; i++) rEnemy[i].active = false;
   rScore = 0; rOver = false; rSpawnMs = millis(); rScroll = 0;
+  if (rHigh < 0) rHigh = gRaceLoadHigh();    // load once per session
 }
 static void gRaceA() { if (rOver) { beep(1800, 40); gRaceInit(); } }
 
@@ -355,6 +366,7 @@ static void gRaceTick() {
       if (rPx < rEnemy[i].x + RACE_PW && rPx + RACE_PW > rEnemy[i].x &&
           RACE_PY < rEnemy[i].y + RACE_PH && RACE_PY + RACE_PH > rEnemy[i].y) {
         rOver = true; beep(500, 100); beep(350, 200);
+        if (rScore > rHigh) { rHigh = rScore; gRaceSaveHigh(rHigh); }
       }
     }
   }
@@ -370,15 +382,21 @@ static void gRaceTick() {
   // player (yellow car with racing stripes, facing up)
   gRaceCar((int)rPx, RACE_PY, 0xFFE0, false, 1);
 
-  spr.setTextSize(1); spr.setTextColor(COL_HUD, 0x2104);
-  spr.setCursor(4, 4); spr.printf("score %d", rScore);
+  spr.setTextSize(1);
+  spr.setTextColor(COL_HUD, 0x2104);
+  spr.setCursor(4, 4);  spr.printf("score %d", rScore);
+  spr.setTextColor(0xFFE0, 0x2104);
+  spr.setCursor(4, 15); spr.printf("best  %d", rHigh < 0 ? 0 : rHigh);
   if (rOver) {
     spr.setTextColor(0xF800, 0x2104);
-    spr.setCursor(W/2 - 18, H/2 - 16); spr.print("CRASH");
+    spr.setCursor(W/2 - 18, H/2 - 24); spr.print("CRASH");
     spr.setTextColor(COL_HUD, 0x2104);
-    spr.setCursor(W/2 - 30, H/2); spr.printf("score %d", rScore);
+    spr.setCursor(W/2 - 30, H/2 - 6); spr.printf("score %d", rScore);
+    bool isNew = (rScore >= rHigh && rScore > 0);
+    spr.setTextColor(0xFFE0, 0x2104);
+    spr.setCursor(W/2 - 30, H/2 + 8); spr.printf(isNew ? "NEW BEST!" : "best %d", rHigh);
     spr.setTextColor(0x8410, 0x2104);
-    spr.setCursor(W/2 - 33, H/2 + 16); spr.print("A:retry B:back");
+    spr.setCursor(W/2 - 39, H/2 + 26); spr.print("A:retry  B:back");
   }
 }
 
