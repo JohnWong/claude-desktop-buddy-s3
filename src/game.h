@@ -146,19 +146,32 @@ static void gMazeTick() {
 // ===========================================================================
 // 6 graphic symbols; index 0 (SEVEN) is the jackpot.
 //   0 SEVEN  1 CHERRY  2 BELL  3 STAR  4 DIAMOND  5 BAR
-static int      slReel[3];          // current symbol per reel
-static bool     slSpin[3];          // reel still spinning?
+// Each reel is a strip of repeating symbols scrolling downward. slPos is the
+// vertical scroll offset in pixels; the symbol "in the window" is the strip
+// cell at floor(slPos/CELL). Reels spin at full speed, then decelerate and
+// snap to a cell boundary when stopped (skill-stop with A, or auto after a
+// staggered timeout).
+static const float    SLOT_CELL  = 84.0f;  // px per symbol on the strip = window height
+static const float    SLOT_SPIN  = 24.0f;  // full-speed scroll (px/frame)
+static const float    SLOT_DECEL = 1.4f;   // deceleration while stopping
+static const float    SLOT_MINV  = 7.0f;   // snap-to-cell below this speed
+static float    slPos[3];           // scroll offset per reel (px, grows downward)
+static float    slVel[3];           // current scroll speed per reel
+static uint8_t  slSt[3];            // 0 idle/aligned, 1 spinning, 2 stopping
+static uint32_t slSpinMs;           // when this spin started (for auto-stop)
 static int      slCredits;
 static int      slWin;              // last payout (for the result flash)
-static uint32_t slStep;             // animation timer
 static uint32_t slMsgMs;            // result-message timestamp
 
+static inline int slReelVal(int i) {
+  return ((int)floorf(slPos[i] / SLOT_CELL)) % 6;
+}
 static void gSlotInit() {
-  for (int i = 0; i < 3; i++) { slReel[i] = gRand(6); slSpin[i] = false; }
-  slCredits = 10; slWin = 0; slStep = millis(); slMsgMs = 0;
+  for (int i = 0; i < 3; i++) { slPos[i] = gRand(6) * SLOT_CELL; slVel[i] = 0; slSt[i] = 0; }
+  slCredits = 10; slWin = 0; slMsgMs = 0; slSpinMs = 0;
 }
 static void gSlotEvaluate() {
-  int a = slReel[0], b = slReel[1], c = slReel[2];
+  int a = slReelVal(0), b = slReelVal(1), c = slReelVal(2);
   if (a == b && b == c) slWin = (a == 0) ? 50 : 20;        // triple (7 = jackpot)
   else if (a == b || b == c || a == c) slWin = 3;          // any pair
   else slWin = 0;
@@ -169,16 +182,15 @@ static void gSlotEvaluate() {
   else beep(500, 120);
 }
 static void gSlotA() {
-  bool anySpin = slSpin[0] || slSpin[1] || slSpin[2];
-  if (!anySpin) {                       // start a new spin
+  bool anyActive = slSt[0] || slSt[1] || slSt[2];
+  if (!anyActive) {                     // start a new spin
     if (slCredits <= 0) { beep(400, 120); return; }
     slCredits--; slWin = 0; slMsgMs = 0;
-    slSpin[0] = slSpin[1] = slSpin[2] = true;
-    slStep = millis();
+    for (int i = 0; i < 3; i++) { slSt[i] = 1; slVel[i] = SLOT_SPIN; }
+    slSpinMs = millis();
     beep(1500, 40);
-  } else {                              // skill-stop the leftmost spinning reel
-    for (int i = 0; i < 3; i++) if (slSpin[i]) { slSpin[i] = false; beep(1900, 35); break; }
-    if (!(slSpin[0] || slSpin[1] || slSpin[2])) gSlotEvaluate();
+  } else {                              // skill-stop the leftmost still-spinning reel
+    for (int i = 0; i < 3; i++) if (slSt[i] == 1) { slSt[i] = 2; beep(1900, 35); break; }
   }
 }
 // Draw symbol `idx` centered at (cx,cy), ~40px tall, with primitives.
@@ -225,11 +237,24 @@ static void gSlotSym(int cx, int cy, int idx) {
 }
 
 static void gSlotTick() {
-  if ((slSpin[0] || slSpin[1] || slSpin[2]) && millis() - slStep > 55) {
-    slStep = millis();
-    for (int i = 0; i < 3; i++) if (slSpin[i]) slReel[i] = (slReel[i] + 1) % 6;
+  bool wasActive = slSt[0] || slSt[1] || slSt[2];
+  // Advance each reel.
+  for (int i = 0; i < 3; i++) {
+    if (slSt[i] == 1) {               // full-speed spin
+      slPos[i] += SLOT_SPIN;
+      // staggered auto-stop if the player doesn't skill-stop
+      if (millis() - slSpinMs > (uint32_t)(1700 + i * 700)) slSt[i] = 2;
+    } else if (slSt[i] == 2) {        // decelerating to a stop
+      slPos[i] += slVel[i] > SLOT_MINV ? slVel[i] : SLOT_MINV;
+      slVel[i] -= SLOT_DECEL;
+      if (slVel[i] <= SLOT_MINV) {    // snap to the nearest cell boundary
+        slPos[i] = roundf(slPos[i] / SLOT_CELL) * SLOT_CELL;
+        slVel[i] = 0; slSt[i] = 0; beep(1700, 30);
+      }
+    }
   }
-  bool anySpin = slSpin[0] || slSpin[1] || slSpin[2];
+  bool nowActive = slSt[0] || slSt[1] || slSt[2];
+  if (wasActive && !nowActive) gSlotEvaluate();   // all reels just settled
 
   // Landscape, full-screen: draw into the sprite rotated 90° (logical 240x135),
   // then restore rotation so the main loop's pushSprite presents it as-is.
@@ -241,16 +266,29 @@ static void gSlotTick() {
   spr.setTextColor(COL_HUD, 0x0008);
   spr.setCursor(LW - 78, 8); spr.printf("credits %d", slCredits);
 
-  const int bw = 60, bh = 84, gap = 12;
+  const int bw = 60, bh = (int)SLOT_CELL, gap = 12;
   const int total = bw * 3 + gap * 2, x0 = (LW - total) / 2, y0 = 26;
   for (int i = 0; i < 3; i++) {
     int x = x0 + i * (bw + gap);
+    bool act = slSt[i] != 0;
     spr.fillRoundRect(x, y0, bw, bh, 6, 0x18E3);
-    spr.drawRoundRect(x, y0, bw, bh, 6, slSpin[i] ? 0xFFE0 : 0x4208);
-    if (slSpin[i]) spr.drawRoundRect(x + 1, y0 + 1, bw - 2, bh - 2, 6, 0xFFE0);
-    gSlotSym(x + bw / 2, y0 + bh / 2, slReel[i]);
+    // clip the scrolling strip to this reel window
+    spr.setClipRect(x + 1, y0 + 1, bw - 2, bh - 2);
+    int base = (int)floorf(slPos[i] / SLOT_CELL);
+    float shift = slPos[i] - base * SLOT_CELL;     // 0..CELL, grows downward
+    for (int k = -1; k <= 1; k++) {                // symbols covering the window
+      int idx = ((base - k) % 6 + 6) % 6;
+      int cy = y0 + bh / 2 + (int)shift + k * (int)SLOT_CELL;
+      gSlotSym(x + bw / 2, cy, idx);
+    }
+    spr.clearClipRect();
+    // window frame + center payline + spin highlight
+    spr.drawRoundRect(x, y0, bw, bh, 6, act ? 0xFFE0 : 0x4208);
+    if (act) spr.drawRoundRect(x + 1, y0 + 1, bw - 2, bh - 2, 6, 0xFFE0);
+    spr.drawFastHLine(x + 4, y0 + bh / 2, bw - 8, 0x630C);
   }
 
+  bool anySpin = nowActive;
   if (slMsgMs && millis() - slMsgMs < 2500 && !anySpin) {
     spr.setTextSize(2);
     if (slWin > 0) {
