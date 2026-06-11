@@ -23,21 +23,38 @@ static const uint16_t COL_GOAL = 0x07E0; // green
 static const uint16_t COL_BALL = 0xFFE0; // amber/yellow
 static const uint16_t COL_BG   = 0x0000; // black
 static const uint16_t COL_HUD  = 0xFFFF; // white
+static const uint16_t COL_TRAP = 0xF800; // red (hole — touching resets the ball)
 
 struct GameRect { int x, y, w, h; };
 
-// Fixed serpentine maze: horizontal bars with alternating gaps. The ball
-// must weave top -> bottom. Walls are AABBs in sprite coordinates.
+// Serpentine maze: alternating-gap horizontal bars plus vertical stubs that
+// pinch the channels, so the ball has to weave a tighter path top -> bottom.
 static const GameRect GAME_WALLS[] = {
-  { 0,   40, 100, 8 },   // bar leaving a gap on the right
-  { 35,  80, 100, 8 },   // gap on the left
-  { 0,  120, 100, 8 },   // gap on the right
-  { 35, 160, 100, 8 },   // gap on the left
-  { 0,  200,  70, 8 },   // gap on the right, just above the goal
+  { 0,   42, 101, 8 },   // A: gap on the right (101..135)
+  { 55,  50,   8, 40 },  //   vertical stub hanging into the A-B channel
+  { 34,  82, 101, 8 },   // B: gap on the left (0..34)
+  { 80,  90,   8, 40 },  //   stub into the B-C channel
+  { 0,  122, 101, 8 },   // C: gap on the right
+  { 47, 130,   8, 40 },  //   stub into the C-D channel
+  { 34, 162, 101, 8 },   // D: gap on the left
+  { 80, 170,   8, 40 },  //   stub into the D-E channel
+  { 0,  202,  97, 8 },   // E: gap on the right, just above the goal
 };
 static const int GAME_WALL_N = sizeof(GAME_WALLS) / sizeof(GAME_WALLS[0]);
 
-static const GameRect GAME_GOAL = { 95, 218, 32, 18 };
+// Traps: touching one bounces the ball back to start (timer keeps running,
+// fail counter +1). Drawn as red holes. Sit in the open part of each channel
+// so you must steer a precise lane around them.
+static const GameRect GAME_TRAPS[] = {
+  { 18,  62, 13, 13 },   // A-B channel, left side
+  { 100, 100, 13, 13 },  // B-C channel, right side
+  { 18, 140, 13, 13 },   // C-D channel, left side
+  { 102, 180, 13, 13 },  // D-E channel, right side
+  { 60, 102, 11, 11 },   // extra, mid
+};
+static const int GAME_TRAP_N = sizeof(GAME_TRAPS) / sizeof(GAME_TRAPS[0]);
+
+static const GameRect GAME_GOAL = { 99, 216, 34, 20 };
 
 // ---- State -----------------------------------------------------------------
 static float gBx, gBy, gVx, gVy;
@@ -46,6 +63,7 @@ static float gAx0, gAy0;          // calibration (neutral tilt)
 static bool  gWon = false;
 static uint32_t gWonMs = 0;
 static uint32_t gStartMs = 0;
+static int   gFails = 0;          // times you fell in a trap this run
 
 static inline bool gAabbOverlap(float cx, float cy, float r, const GameRect& w) {
   return (cx + r > w.x) && (cx - r < w.x + w.w) &&
@@ -81,11 +99,16 @@ static void gReadAccelCalibrated(float* dx, float* dy) {
   *dy = gSmAy - gAy0;
 }
 
-void gameInit() {
-  gBx = 18; gBy = 16;            // top-left, before the first bar
+static void gRespawn() {        // back to start, keep timer/fails/calibration
+  gBx = 18; gBy = 16;           // top-left, before the first bar
   gVx = gVy = 0;
+}
+
+void gameInit() {
+  gRespawn();
   gWon = false;
   gWonMs = 0;
+  gFails = 0;
   gStartMs = millis();
   // Seed the low-pass and capture neutral tilt as the calibration baseline.
   float ax, ay, az;
@@ -126,6 +149,16 @@ void gameTick() {
     // Wall collisions.
     for (int i = 0; i < GAME_WALL_N; i++) gResolve(GAME_WALLS[i]);
 
+    // Trap collisions: fall in a hole → bounce back to start, fail +1.
+    for (int i = 0; i < GAME_TRAP_N; i++) {
+      if (gAabbOverlap(gBx, gBy, GAME_R, GAME_TRAPS[i])) {
+        gFails++;
+        beep(300, 150);   // buzz
+        gRespawn();
+        break;
+      }
+    }
+
     // Win check: ball center inside the goal.
     if (gBx > GAME_GOAL.x && gBx < GAME_GOAL.x + GAME_GOAL.w &&
         gBy > GAME_GOAL.y && gBy < GAME_GOAL.y + GAME_GOAL.h) {
@@ -147,6 +180,11 @@ void gameTick() {
   for (int i = 0; i < GAME_WALL_N; i++)
     spr.fillRect(GAME_WALLS[i].x, GAME_WALLS[i].y,
                  GAME_WALLS[i].w, GAME_WALLS[i].h, COL_WALL);
+  // traps (red holes)
+  for (int i = 0; i < GAME_TRAP_N; i++) {
+    const GameRect& t = GAME_TRAPS[i];
+    spr.fillCircle(t.x + t.w / 2, t.y + t.h / 2, t.w / 2, COL_TRAP);
+  }
   // ball
   spr.fillCircle((int)gBx, (int)gBy, (int)GAME_R, COL_BALL);
 
@@ -159,7 +197,7 @@ void gameTick() {
   } else {
     spr.setTextColor(COL_HUD, COL_BG);
     spr.setCursor(3, 3);
-    spr.printf("%lus", (millis() - gStartMs) / 1000);
+    spr.printf("%lus  x%d", (millis() - gStartMs) / 1000, gFails);
   }
 }
 
