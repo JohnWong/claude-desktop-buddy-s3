@@ -53,6 +53,8 @@ bool gameActive = false;
 // hooks above that include point can reference them.
 void gameInit();
 void gameTick();
+// Defined in trafficlight.h (included before setup); used by the menu above.
+void tlSelfTest();
 void gameButtonA();
 void gameButtonB();
 void gameButtonALong();
@@ -184,8 +186,8 @@ void applyDisplayMode() {
   characterInvalidate();  // redraws character on next tick (text mode path)
 }
 
-const char* menuItems[] = { "settings", "turn off", "help", "about", "demo", "game", "close" };
-const uint8_t MENU_N = 7;
+const char* menuItems[] = { "settings", "turn off", "help", "about", "demo", "game", "lights", "close" };
+const uint8_t MENU_N = 8;
 
 bool    settingsOpen = false;
 uint8_t settingsSel  = 0;
@@ -365,7 +367,8 @@ void menuConfirm() {
       break;
     case 4: dataSetDemo(!dataDemo()); break;
     case 5: menuOpen = false; gameActive = true; gameInit(); break;
-    case 6: menuOpen = false; characterInvalidate(); break;
+    case 6: menuOpen = false; tlSelfTest(); characterInvalidate(); break;
+    case 7: menuOpen = false; characterInvalidate(); break;
   }
 }
 
@@ -1193,6 +1196,7 @@ void drawHUD() {
 }
 
 #include "game.h"
+#include "trafficlight.h"
 
 void setup() {
   auto cfg = M5.config();
@@ -1210,6 +1214,7 @@ void setup() {
   settingsLoad();
   petNameLoad();
   buddyInit();
+  tlBegin();   // probe optional PbHub traffic-light unit on the Grove port
 
   // BLE stays always-on; s.bt is stored as a preference only.
   spr.setColorDepth(16);
@@ -1253,6 +1258,7 @@ void loop() {
   uint32_t now = millis();
 
   dataPoll(&tama);
+  tlUpdate(tama);   // mirror the session strip onto the physical traffic lights
   if (statsPollLevelUp()) triggerOneShot(P_CELEBRATE, 3000);
   baseState = derive(tama);
 
