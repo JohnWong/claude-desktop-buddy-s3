@@ -72,6 +72,10 @@ static bool tlBegin() {
   return tlPresent;
 }
 
+// Invalidate the shadow so the next tlUpdate re-pushes every module. Call after
+// something else (e.g. a game) has driven the lamps directly.
+static inline void tlResync() { tlShadow[0] = tlShadow[1] = tlShadow[2] = 0xFF; }
+
 // Mirror the live session strip onto the physical lamps. Cheap: only touches
 // the I2C bus when a module's state actually changes.
 static void tlUpdate(const TamaState& s) {

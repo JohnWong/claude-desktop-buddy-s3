@@ -34,13 +34,14 @@ enum { GS_PICKER = 0, GS_PLAY = 1 };
 static int gScreen = GS_PICKER;
 static int gSel    = 0;     // picker cursor
 static int gGame   = 0;     // active game index
-static const char* GAME_NAMES[] = { "MAZE", "SLOTS", "RACER" };
-static const int   GAME_N = 3;
+static const char* GAME_NAMES[] = { "MAZE", "SLOTS", "RACER", "REACT" };
+static const int   GAME_N = 4;
 
 // Forward decls for per-game lifecycles.
 static void gMazeInit();  static void gMazeTick();  static void gMazeA();
 static void gSlotInit();  static void gSlotTick();  static void gSlotA();
 static void gRaceInit();  static void gRaceTick();  static void gRaceA();
+static void gReactInit(); static void gReactTick(); static void gReactA();
 
 // ===========================================================================
 // Game 1 — Tilt-ball maze
@@ -635,6 +636,134 @@ static void gRaceTick() {
 }
 
 // ===========================================================================
+// Game 4 — Reaction race (起步反应竞速). F1-style start lights: three reds come
+// on one by one, hold a random beat, then lights-out + GREEN = GO. Slam A as
+// fast as you can; the reaction time (ms) shows and the best is kept in NVS.
+// Pressing before GO is a JUMP START. Drives the physical PbHub traffic lights
+// in lockstep when present (red gantry building, then green on GO).
+// ===========================================================================
+static const uint32_t RX_STEP = 650;   // ms between each red coming on
+static uint8_t  rxPhase;     // 0 ready, 1 reds-building, 2 armed-hold, 3 GO/timing, 4 result, 5 jump
+static uint32_t rxT0;        // current phase start (ms)
+static uint32_t rxGoMs;      // when GO fired
+static uint32_t rxHold;      // random armed-hold duration
+static int      rxLit;       // reds currently on (0..3)
+static int      rxMs;        // last reaction time (ms)
+static int      rxBest = -1; // best (lowest) reaction; -1 unloaded, 0 = none yet
+static bool     rxNewBest;
+
+static int gReactLoadBest() {
+  Preferences p; p.begin("buddy", true);
+  int b = p.getInt("rxbest", 0); p.end(); return b;
+}
+static void gReactSaveBest(int b) {
+  Preferences p; p.begin("buddy", false);
+  p.putInt("rxbest", b); p.end();
+}
+
+// Set physical module m: 0 off, 1 red, 2 green (no-op without a PbHub).
+static inline void rxLight(int m, uint8_t which) {
+  if (!tlPresent) return;
+  tlSet(m * 3 + 0, which == 1);
+  tlSet(m * 3 + 1, false);
+  tlSet(m * 3 + 2, which == 2);
+}
+
+static void gReactArm() {              // begin a fresh start-light sequence
+  rxPhase = 1; rxLit = 0; rxT0 = millis(); rxNewBest = false;
+  if (tlPresent) tlAllOff();
+  beep(1400, 50);
+}
+static bool rxPressHandled = false;     // swallow the release paired with a handled press
+
+static void gReactInit() {
+  rxPhase = 0; rxLit = 0; rxMs = 0; rxNewBest = false; rxPressHandled = false;
+  if (rxBest < 0) rxBest = gReactLoadBest();
+  if (tlPresent) tlAllOff();
+}
+// Time-critical: fires on the A DOWN edge (no press-hold/release latency).
+static void gReactDown() {
+  if (rxPhase == 3) {                   // reacted!
+    rxMs = (int)(millis() - rxGoMs);
+    rxPhase = 4;
+    if (rxBest <= 0 || rxMs < rxBest) { rxBest = rxMs; gReactSaveBest(rxBest); rxNewBest = true; }
+    beep(2600, 60); beep(3100, 90);
+    rxPressHandled = true;
+  } else if (rxPhase == 1 || rxPhase == 2) {   // pressed before GO — jump start
+    rxPhase = 5;
+    for (int m = 0; m < 3; m++) rxLight(m, 1);  // all red = penalty
+    // "啊—哦" descending fail sfx. Kept in the 500–1000Hz band: the tiny
+    // speaker barely reproduces sub-400Hz, so a low droop would be inaudible.
+    beep(950, 110); delay(95);
+    beep(760, 120); delay(105);
+    beep(560, 360); delay(330);
+    rxPressHandled = true;
+  }
+}
+// Non-critical (start / play again): fine on the release edge. The release that
+// pairs with a down-edge we already handled is swallowed.
+static void gReactA() {
+  if (rxPressHandled) { rxPressHandled = false; return; }
+  gReactArm();   // phase 0 = start, phase 4/5 = go again
+}
+static void gReactTick() {
+  uint32_t now = millis();
+  if (rxPhase == 1) {                   // reds come on one at a time
+    int want = (int)((now - rxT0) / RX_STEP) + 1; if (want > 3) want = 3;
+    while (rxLit < want) { rxLight(rxLit, 1); beep(1200, 60); rxLit++; }
+    if (rxLit >= 3 && now - rxT0 >= 3 * RX_STEP) {
+      rxPhase = 2; rxT0 = now; rxHold = 700 + gRand(2200);   // hold 0.7–2.9s
+    }
+  } else if (rxPhase == 2) {            // armed: wait the random beat, then GO
+    if (now - rxT0 >= rxHold) {
+      for (int m = 0; m < 3; m++) rxLight(m, 2);             // lights out + GREEN
+      rxGoMs = now; rxPhase = 3; beep(3200, 120);
+    }
+  }
+
+  // ---- render (portrait) ----
+  spr.fillSprite(COL_BG);
+  spr.setTextSize(2); spr.setTextColor(COL_HUD, COL_BG);
+  spr.setCursor(10, 14); spr.print("REACTION");
+
+  // start-light gantry — three lamps mirroring the physical modules
+  const int cyL = 96, r = 17, cxs[3] = { 30, 67, 104 };
+  for (int m = 0; m < 3; m++) {
+    uint16_t c = 0x2104;                // dark/off
+    if      (rxPhase == 1)                    c = (m < rxLit) ? 0xF800 : 0x2104;
+    else if (rxPhase == 2 || rxPhase == 5)    c = 0xF800;     // red
+    else if (rxPhase == 3 || rxPhase == 4)    c = 0x07E0;     // green
+    spr.fillCircle(cxs[m], cyL, r, c);
+    spr.drawCircle(cxs[m], cyL, r, 0x630C);
+  }
+
+  // status line
+  const int sy = 140;
+  if (rxPhase == 0)      { spr.setTextSize(2); spr.setTextColor(0x8410, COL_BG); spr.setCursor(22, sy); spr.print("GET SET"); }
+  else if (rxPhase == 1) { spr.setTextSize(2); spr.setTextColor(0xFD20, COL_BG); spr.setCursor(30, sy); spr.print("READY"); }
+  else if (rxPhase == 2) { spr.setTextSize(2); spr.setTextColor(0xF800, COL_BG); spr.setCursor(30, sy); spr.print("WAIT.."); }
+  else if (rxPhase == 3) { spr.setTextSize(3); spr.setTextColor(0x07E0, COL_BG); spr.setCursor(36, sy - 4); spr.print("GO!"); }
+  else if (rxPhase == 4) {
+    spr.setTextSize(3); spr.setTextColor(rxNewBest ? 0xFFE0 : 0x07E0, COL_BG);
+    char b[12]; snprintf(b, sizeof(b), "%dms", rxMs);
+    spr.setCursor(W / 2 - (int)strlen(b) * 9, sy - 4); spr.print(b);
+    if (rxNewBest) { spr.setTextSize(1); spr.setTextColor(0xFFE0, COL_BG); spr.setCursor(W / 2 - 28, sy + 26); spr.print("NEW BEST!"); }
+  } else {               // 5 jump start
+    spr.setTextSize(2); spr.setTextColor(0xF800, COL_BG); spr.setCursor(6, sy); spr.print("JUMP START");
+  }
+
+  // best + hint
+  spr.setTextSize(1); spr.setTextColor(0xFFE0, COL_BG);
+  spr.setCursor(8, H - 30);
+  if (rxBest > 0) spr.printf("best %d ms", rxBest); else spr.print("best  --");
+  spr.setTextColor(0x8410, COL_BG); spr.setCursor(8, H - 16);
+  spr.print(rxPhase == 0 ? "A: start   B: back" :
+            rxPhase == 3 ? "A: NOW!" :
+            rxPhase >= 4 ? "A: again   B: back" :
+                           "A:(wait)   B: back");
+}
+
+// ===========================================================================
 // Picker + dispatcher
 // ===========================================================================
 // Picker rows = the games plus a trailing EXIT entry.
@@ -661,6 +790,7 @@ static void gDrawPicker() {
 void gameInit() {
   gScreen = GS_PICKER; gSel = 0;
   randomSeed(micros() ^ (uint32_t)esp_random());
+  if (tlPresent) tlAllOff();   // games own the lights; clear the session mirror
 }
 void gameTick() {
   lastInteractMs = millis();
@@ -669,22 +799,27 @@ void gameTick() {
     case 0: gMazeTick(); break;
     case 1: gSlotTick(); break;
     case 2: gRaceTick(); break;
+    case 3: gReactTick(); break;
   }
 }
-void gameButtonA() {              // short A
+void gameButtonA() {              // short A (release edge)
   if (gScreen == GS_PICKER) { gSel = (gSel + 1) % PICK_N; beep(1800, 30); return; }
-  switch (gGame) { case 0: gMazeA(); break; case 1: gSlotA(); break; case 2: gRaceA(); break; }
+  switch (gGame) { case 0: gMazeA(); break; case 1: gSlotA(); break; case 2: gRaceA(); break; case 3: gReactA(); break; }
+}
+void gameButtonADown() {          // A down-edge — low-latency capture for timing games
+  if (gScreen == GS_PLAY && gGame == 3) gReactDown();
 }
 void gameButtonB() {             // B
   if (gScreen == GS_PICKER) {
     if (gSel == GAME_N) { gameExit(); return; }   // EXIT row
     gGame = gSel; gScreen = GS_PLAY; beep(2400, 40);
-    switch (gGame) { case 0: gMazeInit(); break; case 1: gSlotInit(); break; case 2: gRaceInit(); break; }
+    switch (gGame) { case 0: gMazeInit(); break; case 1: gSlotInit(); break; case 2: gRaceInit(); break; case 3: gReactInit(); break; }
   } else {
     gScreen = GS_PICKER; beep(1200, 40);    // back to the picker
+    if (tlPresent) tlAllOff();              // clear any lamps a game lit
   }
 }
-void gameExit() { gameActive = false; beep(900, 60); }
+void gameExit() { gameActive = false; beep(900, 60); if (tlPresent) tlAllOff(); tlResync(); }
 void gameButtonALong() {         // long A
   // In slots, long-press cycles the symbol skin; everywhere else it exits.
   if (gScreen == GS_PLAY && gGame == 1) {

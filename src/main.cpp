@@ -1195,8 +1195,8 @@ void drawHUD() {
   }
 }
 
-#include "game.h"
 #include "trafficlight.h"
+#include "game.h"
 
 void setup() {
   auto cfg = M5.config();
@@ -1258,7 +1258,7 @@ void loop() {
   uint32_t now = millis();
 
   dataPoll(&tama);
-  tlUpdate(tama);   // mirror the session strip onto the physical traffic lights
+  if (!gameActive) tlUpdate(tama);   // mirror sessions onto the lights (games own them while active)
   if (statsPollLevelUp()) triggerOneShot(P_CELEBRATE, 3000);
   baseState = derive(tama);
 
@@ -1356,6 +1356,10 @@ void loop() {
       screenOff = true;
     }
   }
+
+  // Time-critical games (reaction) capture A on the DOWN edge — waiting for the
+  // release would add the whole press-hold duration to the measured time.
+  if (M5.BtnA.wasPressed() && gameActive && !swallowBtnA) gameButtonADown();
 
   if (M5.BtnA.pressedFor(600) && !btnALong && !swallowBtnA) {
     btnALong = true;
