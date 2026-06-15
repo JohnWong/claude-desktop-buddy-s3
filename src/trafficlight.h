@@ -40,8 +40,17 @@ static const TLPin TL_LAMP[9] = {
   {4, 1}, {4, 0}, {5, 1},   // module 2: RED YEL GRN   (CH3 avoided)
 };
 
-static bool    tlPresent   = false;
-static uint8_t tlShadow[3] = {0xFF, 0xFF, 0xFF};   // last pushed module states
+static bool     tlPresent  = false;
+// Per-module animation state for the session mirror:
+//   tlState — displayed colour currently targeted (0 off / 1 green / 2 yellow / 3 red)
+//   tlPhys  — last colour physically pushed (0 off, else 1/2/3)
+//   tlBurst — deadline (ms) for the fast emphasis blink after a colour change
+static uint8_t  tlState[3] = {0, 0, 0};
+static uint8_t  tlPhys[3]  = {0xFF, 0xFF, 0xFF};
+static uint32_t tlBurst[3] = {0, 0, 0};
+static const uint32_t TL_BURST_MS   = 1200;  // emphasis blink duration on change
+static const uint32_t TL_BURST_HALF = 150;   // emphasis on/off half-period (~4 flashes)
+static const uint32_t TL_RED_PER    = 1200;  // steady "needs you" red blink period
 
 static inline uint8_t tlReg(uint8_t ch, uint8_t io) {
   return (uint8_t)(io + 0x40 + 0x10 * TL_CHTAB[ch]);
@@ -68,22 +77,49 @@ static bool tlBegin() {
   M5.Ex_I2C.begin();
   tlPresent = M5.Ex_I2C.scanID(TL_ADDR, TL_FREQ);
   if (tlPresent) tlAllOff();
-  tlShadow[0] = tlShadow[1] = tlShadow[2] = 0xFF;
+  for (uint8_t m = 0; m < 3; m++) { tlState[m] = 0; tlPhys[m] = 0xFF; tlBurst[m] = 0; }
   return tlPresent;
 }
 
-// Invalidate the shadow so the next tlUpdate re-pushes every module. Call after
-// something else (e.g. a game) has driven the lamps directly.
-static inline void tlResync() { tlShadow[0] = tlShadow[1] = tlShadow[2] = 0xFF; }
+// Invalidate the physical shadow so the next tlUpdate re-pushes every module.
+// Call after something else (e.g. a game) has driven the lamps directly.
+static inline void tlResync() { tlPhys[0] = tlPhys[1] = tlPhys[2] = 0xFF; }
 
-// Mirror the live session strip onto the physical lamps. Cheap: only touches
-// the I2C bus when a module's state actually changes.
+// Map a session to a lamp colour. perm is rare here, so wait + perm both go red
+// ("needs you"); idle shows amber standby; running is green. A module with no
+// session at all stays dark.
+//   colour: 0 off / 1 green / 2 yellow / 3 red   (matches tlModule's selector)
+static inline uint8_t tlColour(bool hasSession, uint8_t st) {
+  if (!hasSession) return 0;       // no session -> off
+  if (st == 1)     return 1;       // running -> green
+  if (st >= 2)     return 3;       // awaiting input / approval -> red
+  return 2;                        // idle -> yellow standby
+}
+
+// Mirror the live sessions onto the physical lamps with attention cues: a colour
+// change kicks off a fast emphasis blink (~4 flashes); in steady state only red
+// ("needs you") keeps a low-frequency blink, while green/yellow stay solid and
+// no-session is off. Only writes the bus on a flip.
 static void tlUpdate(const TamaState& s) {
   if (!tlPresent) return;
+  uint32_t now = millis();
   for (uint8_t m = 0; m < 3; m++) {
-    uint8_t st = (m < s.sessCount) ? s.sessState[m] : 0;
-    if (st > 3) st = 0;
-    if (st != tlShadow[m]) { tlModule(m, st); tlShadow[m] = st; }
+    uint8_t col = tlColour(m < s.sessCount, (m < s.sessCount) ? s.sessState[m] : 0);
+    if (col != tlState[m]) {                       // colour changed -> emphasize
+      tlState[m] = col;
+      tlBurst[m] = (col == 0) ? 0 : now + TL_BURST_MS;  // no burst when going dark
+    }
+    uint8_t want;                                  // 0 = off, else lit colour = col
+    if (col == 0) {
+      want = 0;
+    } else if (now < tlBurst[m]) {                 // fast emphasis blink on change
+      want = ((now / TL_BURST_HALF) & 1) ? 0 : col;
+    } else if (col == 3) {                          // steady: only red blinks, low freq
+      want = (now % TL_RED_PER < TL_RED_PER * 55 / 100) ? 3 : 0;
+    } else {                                        // green / yellow -> solid
+      want = col;
+    }
+    if (want != tlPhys[m]) { tlModule(m, want); tlPhys[m] = want; }
   }
 }
 
@@ -160,5 +196,6 @@ void tlSelfTest() {
   delay(1100);
 
   spr.setTextDatum(TL_DATUM);
-  tlShadow[0] = tlShadow[1] = tlShadow[2] = 0xFF;   // force re-mirror after test
+  tlState[0] = tlState[1] = tlState[2] = 0;
+  tlPhys[0] = tlPhys[1] = tlPhys[2] = 0xFF;          // force re-mirror after test
 }
