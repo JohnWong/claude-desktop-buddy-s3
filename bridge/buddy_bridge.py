@@ -41,6 +41,11 @@ SESSION_TTL   = 3600    # drop sessions with no events for this long (safety)
 # session_id -> {"state": "idle"|"running"|"waiting", "label": str, "seen": ts}
 SESSIONS: dict[str, dict] = {}
 
+# Fixed display slots for the 3-light strip. A session keeps its slot (stable
+# position) while shown, but is evicted when a more-active session pushes it out
+# of the top-3-by-activity. None = empty slot. See aggregate().
+SLOTS: list = [None, None, None]
+
 # Pending permission requests: id -> {"writer", "tool", "hint"}. A hook connection
 # stays open while its prompt is pending; the device's A/B decision (or the hook
 # closing — keyboard answered / timeout) resolves it.
@@ -184,12 +189,16 @@ def aggregate() -> dict:
     #   perm (blocked on approval) > run (processing) > wait (awaiting your
     #   input) > idle. running counts "run"; waiting counts "wait" + "perm"
     #   (everything that needs you).
+    # Red = there is an explicit prompt on the device awaiting you (a permission
+    # request or an AskUserQuestion). A bare idle_prompt timeout (s["awaiting"])
+    # is NOT explicit — it stays idle/yellow so parked sessions don't glow red.
     perm_sids = {p.get("sid") for p in PENDING.values() if p.get("sid")}
+    ask_sids  = {a.get("sid") for a in ASK.values() if a.get("sid")}
     def classify(sid, s):
-        if sid in perm_sids:          return "perm"
-        if s["state"] == "running":   return "run"
-        if s.get("awaiting"):         return "wait"
-        return "idle"
+        if sid in perm_sids:          return "perm"   # permission prompt -> red
+        if s["state"] == "running":   return "run"    # processing -> green
+        if sid in ask_sids:           return "wait"   # on-screen question -> red
+        return "idle"                                  # idle / passive wait -> yellow
     states = {sid: classify(sid, s) for sid, s in SESSIONS.items()}
 
     total    = len(SESSIONS)
@@ -208,9 +217,29 @@ def aggregate() -> dict:
     # Amber border only when you're truly free — ALL sessions idle (running==0).
     awaiting = (running == 0 and not PENDING
                 and any(s.get("awaiting") for s in SESSIONS.values()))
-    # The 3 most-recently-seen sessions, reusing the same classification.
-    recent = sorted(SESSIONS.items(), key=lambda kv: kv[1]["seen"], reverse=True)[:3]
-    sessions = [states[sid] for sid, _ in recent]
+    # Fixed-slot assignment with activity-based eviction: a session keeps its
+    # slot while it stays in the 3-most-active set, but is evicted the moment a
+    # more-active session needs in — so the strip always shows the top-3 active
+    # without reshuffling on every event.
+    for i in range(3):                                    # free slots gone idle/ended
+        if SLOTS[i] is not None and SLOTS[i] not in SESSIONS:
+            SLOTS[i] = None
+    ranked = [sid for sid, _ in sorted(SESSIONS.items(),
+                                       key=lambda kv: kv[1]["seen"], reverse=True)]
+    top = set(ranked[:3])
+    for i in range(3):                                    # evict the ones bumped out
+        if SLOTS[i] is not None and SLOTS[i] not in top:
+            SLOTS[i] = None
+    slotted = {s for s in SLOTS if s is not None}
+    for sid in ranked[:3]:                                # seat newcomers in free slots
+        if sid not in slotted:
+            for i in range(3):
+                if SLOTS[i] is None:
+                    SLOTS[i] = sid
+                    slotted.add(sid)
+                    break
+    sessions = [states[SLOTS[i]] if SLOTS[i] is not None else "none"
+                for i in range(3)]
 
     frame = {"total": total, "running": running, "waiting": waiting,
              "approval": approval, "msg": msg, "tokens": tokens,
@@ -267,6 +296,7 @@ async def handle_conn(reader: asyncio.StreamReader, writer: asyncio.StreamWriter
                 if aid:
                     opts = [str(o)[:21] for o in (ev.get("opts") or [])][:4]
                     ASK[aid] = {"writer": writer,
+                                "sid": str(ev.get("sid") or ""),
                                 "header": str(ev.get("header", ""))[:21],
                                 "proj": str(ev.get("proj", ""))[:21],
                                 "opts": opts}

@@ -173,11 +173,12 @@ static void _applyJson(const char* line, TamaState* out) {
     for (JsonVariant v : ss) {
       if (n >= 3) break;
       const char* s = v.as<const char*>();
-      uint8_t st = 0;
+      uint8_t st = 0xFF;             // default: empty slot ("none") -> off
       if (s) {
         if      (!strcmp(s, "run"))  st = 1;
         else if (!strcmp(s, "wait")) st = 2;
         else if (!strcmp(s, "perm")) st = 3;
+        else if (!strcmp(s, "idle")) st = 0;
       }
       out->sessState[n++] = st;
     }

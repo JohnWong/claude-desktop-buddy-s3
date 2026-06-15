@@ -1013,7 +1013,8 @@ static void drawSessionStrip() {
   static const char* const WORD[4] = { "idle", "run", "wait", "perm" };
   for (int i = 0; i < 3; i++) {
     int y = top + 11 + i * 12;
-    uint8_t st = (i < tama.sessCount) ? tama.sessState[i] : 0;
+    uint8_t st = (i < tama.sessCount) ? tama.sessState[i] : 0xFF;
+    bool empty = (st > 3);                 // 0xFF "none" slot (or out of range)
     int lit = (st == 3) ? 0 : (st == 2) ? 1 : (st == 1) ? 2 : -1;
     spr.setTextColor(p.textDim, p.bg);
     spr.setCursor(4, y); spr.printf("%d", i + 1);
@@ -1021,9 +1022,14 @@ static void drawSessionStrip() {
       int cx = 22 + c * 15;
       spr.fillCircle(cx, y + 3, 5, (c == lit) ? LAMP[c] : 0x2104);  // off = dark
     }
-    uint16_t wc = (st == 0) ? p.textDim : LAMP[lit];
-    spr.setTextColor(wc, p.bg);
-    spr.setCursor(76, y); spr.print(WORD[st > 3 ? 0 : st]);
+    if (empty) {
+      spr.setTextColor(p.textDim, p.bg);
+      spr.setCursor(76, y); spr.print("-");
+    } else {
+      uint16_t wc = (st == 0) ? p.textDim : LAMP[lit];
+      spr.setTextColor(wc, p.bg);
+      spr.setCursor(76, y); spr.print(WORD[st]);
+    }
   }
 
   // Compact 5h usage tucked right above the working/"awaiting you" line, which

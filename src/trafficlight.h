@@ -85,15 +85,16 @@ static bool tlBegin() {
 // Call after something else (e.g. a game) has driven the lamps directly.
 static inline void tlResync() { tlPhys[0] = tlPhys[1] = tlPhys[2] = 0xFF; }
 
-// Map a session to a lamp colour. perm is rare here, so wait + perm both go red
-// ("needs you"); idle shows amber standby; running is green. A module with no
-// session at all stays dark.
+// Map a session state to a lamp colour. perm is rare here, so wait + perm both
+// go red ("needs you"); idle shows amber standby; running is green. 0xFF (the
+// "none"/empty-slot marker) and anything out of range stays dark.
+//   st:     0 idle / 1 run / 2 wait / 3 perm / 0xFF empty
 //   colour: 0 off / 1 green / 2 yellow / 3 red   (matches tlModule's selector)
-static inline uint8_t tlColour(bool hasSession, uint8_t st) {
-  if (!hasSession) return 0;       // no session -> off
-  if (st == 1)     return 1;       // running -> green
-  if (st >= 2)     return 3;       // awaiting input / approval -> red
-  return 2;                        // idle -> yellow standby
+static inline uint8_t tlColour(uint8_t st) {
+  if (st == 1)            return 1;   // running -> green
+  if (st == 2 || st == 3) return 3;   // awaiting input / approval -> red
+  if (st == 0)            return 2;   // idle -> yellow standby
+  return 0;                           // empty / unknown -> off
 }
 
 // Mirror the live sessions onto the physical lamps with attention cues: a colour
@@ -104,7 +105,7 @@ static void tlUpdate(const TamaState& s) {
   if (!tlPresent) return;
   uint32_t now = millis();
   for (uint8_t m = 0; m < 3; m++) {
-    uint8_t col = tlColour(m < s.sessCount, (m < s.sessCount) ? s.sessState[m] : 0);
+    uint8_t col = tlColour((m < s.sessCount) ? s.sessState[m] : 0xFF);
     if (col != tlState[m]) {                       // colour changed -> emphasize
       tlState[m] = col;
       tlBurst[m] = (col == 0) ? 0 : now + TL_BURST_MS;  // no burst when going dark
