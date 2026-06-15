@@ -18,6 +18,7 @@ Usage in settings.json (command):
 """
 import json
 import os
+import re
 import socket
 import sys
 import time
@@ -41,6 +42,46 @@ def post(obj: dict):
         s.close()
     except Exception:
         pass  # fail-open: bridge down → no-op
+
+
+def last_assistant_is_question(path: str) -> bool:
+    """Heuristic: does the final assistant message end with a question? Reads the
+    transcript locally to decide but returns only a bool — NO message content
+    leaves this process (keeps the privacy guarantee above)."""
+    if not path or not os.path.exists(path):
+        return False
+    last_text = ""
+    try:
+        with open(path, "r") as f:
+            for line in f:
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+                msg = obj.get("message") or {}
+                if msg.get("role") != "assistant":
+                    continue
+                content = msg.get("content")
+                if isinstance(content, str):
+                    if content.strip():
+                        last_text = content.strip()
+                elif isinstance(content, list):
+                    for b in content:
+                        if isinstance(b, dict) and b.get("type") == "text":
+                            t = (b.get("text") or "").strip()
+                            if t:
+                                last_text = t
+    except Exception:
+        return False
+    if not last_text:
+        return False
+    tail = last_text[-160:].rstrip().rstrip('”"\'）)】」』』 ')
+    if tail.endswith("?") or tail.endswith("？"):
+        return True
+    # Chinese interrogatives near the very end without an explicit question mark.
+    return bool(re.search(
+        r"(吗|呢|还是|哪个|哪一个|是否|要不要|好吗|可以吗|对吧|如何|怎么样)"
+        r"[。.!！…]?\s*$", tail))
 
 
 def count_output_tokens(path: str) -> int:
@@ -172,8 +213,10 @@ def main():
               "cwd": os.path.basename(data.get("cwd", "") or ""),
               "tpath": data.get("transcript_path", "")})
     elif event == "Stop":
+        tpath = data.get("transcript_path", "")
         post({"evt": "idle", "sid": sid,
-              "tokens": count_output_tokens(data.get("transcript_path", ""))})
+              "tokens": count_output_tokens(tpath),
+              "asking": last_assistant_is_question(tpath)})
     elif event == "Notification":
         post({"evt": "notify", "sid": sid,
               "ntype": data.get("notification_type", "")})

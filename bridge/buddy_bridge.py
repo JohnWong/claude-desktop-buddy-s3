@@ -133,7 +133,7 @@ def now() -> float:
 def touch(sid: str) -> dict:
     s = SESSIONS.get(sid)
     if s is None:
-        s = {"state": "idle", "label": "", "seen": now(), "awaiting": False}
+        s = {"state": "idle", "label": "", "seen": now(), "awaiting": False, "asking": False}
         SESSIONS[sid] = s
     s["seen"] = now()
     return s
@@ -168,8 +168,10 @@ def apply_event(ev: dict):
     elif evt == "run":
         s["state"] = "running"           # whole turn counts as busy (our redefine)
         s["awaiting"] = False            # you replied → clear the awaiting border
+        s["asking"] = False              # you replied → clear any pending question
     elif evt == "idle":
         s["state"] = "idle"              # turn ended (border waits for idle_prompt)
+        s["asking"] = bool(ev.get("asking"))  # heuristic: turn ended on a question
         ONESHOT["completed"] = True      # brief celebrate, like the desktop app
     elif evt == "notify":
         nt = ev.get("ntype", "")
@@ -198,6 +200,7 @@ def aggregate() -> dict:
         if sid in perm_sids:          return "perm"   # permission prompt -> red
         if s["state"] == "running":   return "run"    # processing -> green
         if sid in ask_sids:           return "wait"   # on-screen question -> red
+        if s.get("asking"):           return "wait"   # ended on a question (heuristic) -> red
         return "idle"                                  # idle / passive wait -> yellow
     states = {sid: classify(sid, s) for sid, s in SESSIONS.items()}
 

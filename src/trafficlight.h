@@ -51,6 +51,8 @@ static uint32_t tlBurst[3] = {0, 0, 0};
 static const uint32_t TL_BURST_MS   = 1200;  // emphasis blink duration on change
 static const uint32_t TL_BURST_HALF = 150;   // emphasis on/off half-period (~4 flashes)
 static const uint32_t TL_RED_PER    = 1200;  // steady "needs you" red blink period
+static const uint32_t TL_IDLE_PER   = 60000; // idle heartbeat period (1 min)
+static const uint32_t TL_IDLE_DIP   = 150;   // brief off-dip = one idle blink
 
 static inline uint8_t tlReg(uint8_t ch, uint8_t io) {
   return (uint8_t)(io + 0x40 + 0x10 * TL_CHTAB[ch]);
@@ -115,9 +117,11 @@ static void tlUpdate(const TamaState& s) {
       want = 0;
     } else if (now < tlBurst[m]) {                 // fast emphasis blink on change
       want = ((now / TL_BURST_HALF) & 1) ? 0 : col;
-    } else if (col == 3) {                          // steady: only red blinks, low freq
+    } else if (col == 3) {                          // red: steady low-freq blink
       want = (now % TL_RED_PER < TL_RED_PER * 55 / 100) ? 3 : 0;
-    } else {                                        // green / yellow -> solid
+    } else if (col == 2) {                          // idle yellow: solid + 1/min blink
+      want = (now % TL_IDLE_PER < TL_IDLE_DIP) ? 0 : 2;
+    } else {                                        // running green -> solid
       want = col;
     }
     if (want != tlPhys[m]) { tlModule(m, want); tlPhys[m] = want; }
