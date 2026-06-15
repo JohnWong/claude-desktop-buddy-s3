@@ -354,21 +354,35 @@ async def find_dev():
     )
 
 
+def _restart(reason: str):
+    # On macOS, bleak/CoreBluetooth often can't rediscover the device in-process
+    # after the link drops (e.g. a firmware reflash reboots it) — it just spins on
+    # "device not found" forever, while a brand-new process reconnects instantly.
+    # So once an established link goes away, exit and let launchd (KeepAlive) spawn
+    # a fresh process with a clean CoreBluetooth central. os._exit bypasses the
+    # surrounding try/except (sys.exit would be swallowed by it).
+    print(f"[ble] {reason}; exiting for a clean launchd restart", flush=True)
+    os._exit(1)
+
+
 async def ble_loop():
     while True:
         try:
             dev = await find_dev()
             if not dev:
-                print("[ble] device not found; retrying...")
+                # Device legitimately absent (off / out of range): keep scanning in
+                # THIS process — a fresh one wouldn't help, and exiting here would
+                # just thrash launchd while the device is away.
+                print("[ble] device not found; scanning...", flush=True)
                 await asyncio.sleep(3.0)
                 continue
-            print(f"[ble] found {dev.name} [{dev.address}], connecting...")
+            print(f"[ble] found {dev.name} [{dev.address}], connecting...", flush=True)
             async with BleakClient(dev) as client:
-                print(f"[ble] connected={client.is_connected}")
+                print(f"[ble] connected={client.is_connected}", flush=True)
                 try:
                     await client.start_notify(NUS_TX, on_tx)
                 except Exception as e:
-                    print(f"[ble] TX subscribe failed: {e}")
+                    print(f"[ble] TX subscribe failed: {e}", flush=True)
                 # Sync the clock once per connection so the device RTC is right.
                 lt = time.localtime()
                 tzoff = lt.tm_gmtoff if lt.tm_gmtoff is not None else 0
@@ -386,12 +400,11 @@ async def ble_loop():
                     try:
                         await client.write_gatt_char(NUS_RX, line, response=True)
                     except Exception as e:
-                        print(f"[ble] write failed ({e}); reconnecting")
-                        break
+                        _restart(f"write failed ({e})")
                     await asyncio.sleep(PUSH_PERIOD)
+            _restart("link dropped")
         except Exception as e:
-            print(f"[ble] link error: {e!r}; reconnecting in 2s")
-            await asyncio.sleep(2.0)
+            _restart(f"link error: {e!r}")
 
 
 async def main():
