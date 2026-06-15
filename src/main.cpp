@@ -1006,16 +1006,19 @@ static void drawSessionStrip() {
   spr.setTextColor(p.textDim, p.bg);
   spr.setCursor(4, top - 1); spr.print("sessions");
 
-  // Up to 3 most-recent sessions, one mini traffic light each.
-  //   state 3 = permission → red, 2 = awaiting input → yellow, 1 = running →
-  //   green, 0 = idle → all lamps dark. Only the live lamp glows, like a light.
+  // Up to 3 most-recent sessions, one mini traffic light each. Mirrors the
+  // physical PbHub lights (see trafficlight.h tlColour):
+  //   1 running       -> green
+  //   0 idle          -> yellow (standby)
+  //   2 wait / 3 perm -> red (needs you)
+  //   0xFF none        -> all dark
   static const uint16_t LAMP[3] = { 0xF800, 0xFFE0, 0x07E0 };   // red yellow green
   static const char* const WORD[4] = { "idle", "run", "wait", "perm" };
   for (int i = 0; i < 3; i++) {
     int y = top + 11 + i * 12;
     uint8_t st = (i < tama.sessCount) ? tama.sessState[i] : 0xFF;
     bool empty = (st > 3);                 // 0xFF "none" slot (or out of range)
-    int lit = (st == 3) ? 0 : (st == 2) ? 1 : (st == 1) ? 2 : -1;
+    int lit = empty ? -1 : (st == 1) ? 2 : (st >= 2) ? 0 : 1;   // green / red / yellow
     spr.setTextColor(p.textDim, p.bg);
     spr.setCursor(4, y); spr.printf("%d", i + 1);
     for (int c = 0; c < 3; c++) {
@@ -1026,8 +1029,7 @@ static void drawSessionStrip() {
       spr.setTextColor(p.textDim, p.bg);
       spr.setCursor(76, y); spr.print("-");
     } else {
-      uint16_t wc = (st == 0) ? p.textDim : LAMP[lit];
-      spr.setTextColor(wc, p.bg);
+      spr.setTextColor(LAMP[lit], p.bg);
       spr.setCursor(76, y); spr.print(WORD[st]);
     }
   }
