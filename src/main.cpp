@@ -1304,6 +1304,7 @@ void loop() {
       // only runs from drawHUD which only runs in DISP_NORMAL.
       displayMode = DISP_NORMAL;
       menuOpen = settingsOpen = resetOpen = false;
+      gameActive = false; tlResync();   // a game would swallow the approval overlay
       applyDisplayMode();
       characterInvalidate();
       if (buddyMode) buddyInvalidate();
@@ -1321,6 +1322,7 @@ void loop() {
       beep(1000, 80); delay(40); beep(1300, 80);   // two-tone "question"
       displayMode = DISP_NORMAL;
       menuOpen = settingsOpen = resetOpen = false;
+      gameActive = false; tlResync();   // a game would swallow the ask overlay
       applyDisplayMode();
       characterInvalidate();
       if (buddyMode) buddyInvalidate();
