@@ -1012,13 +1012,13 @@ static void drawSessionStrip() {
   //   0 idle          -> yellow (standby)
   //   2 wait / 3 perm -> red (needs you)
   //   0xFF none        -> all dark
-  static const uint16_t LAMP[3] = { 0xF800, 0xFFE0, 0x07E0 };   // red yellow green
+  static const uint16_t LAMP[3] = { 0x07E0, 0xFFE0, 0xF800 };   // green yellow red
   static const char* const WORD[4] = { "idle", "run", "wait", "perm" };
   for (int i = 0; i < 3; i++) {
     int y = top + 11 + i * 12;
     uint8_t st = (i < tama.sessCount) ? tama.sessState[i] : 0xFF;
     bool empty = (st > 3);                 // 0xFF "none" slot (or out of range)
-    int lit = empty ? -1 : (st == 1) ? 2 : (st >= 2) ? 0 : 1;   // green / red / yellow
+    int lit = empty ? -1 : (st == 1) ? 0 : (st >= 2) ? 2 : 1;   // green / red / yellow
     spr.setTextColor(p.textDim, p.bg);
     spr.setCursor(4, y); spr.printf("%d", i + 1);
     for (int c = 0; c < 3; c++) {
