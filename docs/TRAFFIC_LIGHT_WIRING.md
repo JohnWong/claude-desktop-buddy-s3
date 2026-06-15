@@ -17,10 +17,10 @@ StickS3 (M5StickC Plus S3)
 PbHub v1.1 (I2C 从机, 地址 0x61)
    │  6 个 Port.B 通道 CH0~CH5,每通道 2 路数字 IO(IO0 / IO1)
    ▼
-交通灯 ×3(每个 4 针:GND / RE / YE / GR,共阴,拉高点亮)
+交通灯 ×3(HS-F05-L,排针顺序 GND / GR / YE / RE,共阴,拉高点亮)
 ```
 
-- 9 路信号(3 灯 × 红黄绿)分布在 **5 个通道**上,**避开 CH3**(不好插线)。
+- 9 路信号(3 灯 × 红黄绿)分布在 **5 个通道**上,**CH2和CH3插线困难，将插头削薄插到CH1，避开 CH3**。
 - 每通道用满 2 路数字输出(IO0 + IO1),5 通道 = 10 路,占 9 路,**CH5·IO1 空、CH3 空**。
 
 ---
@@ -31,7 +31,7 @@ PbHub v1.1 (I2C 从机, 地址 0x61)
 |---|---|
 | StickS3 | M5StickC Plus S3(ESP32-S3,8MB/8MB,135×240,BMI270) |
 | PbHub | Unit PbHub v1.1(STM32F030,I2C 0x61,固件支持数字读写/PWM/WS2812) |
-| 交通灯 ×3 | 普通 4 针共阴模块(GND/RE/YE/GR),每路一颗 LED |
+| 交通灯 ×3 | **HS-F05-L** 交通灯 LED 模块,4 针**排针顺序 GND·GR·YE·RE**,共阴,每路一颗 LED |
 | Grove 线 ×1 | StickS3↔PbHub,HY2.0-4P,防呆直插 |
 | 杜邦线 | PbHub 通道口 ↔ 交通灯排针 |
 
