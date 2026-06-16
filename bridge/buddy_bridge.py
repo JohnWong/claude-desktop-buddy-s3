@@ -399,17 +399,24 @@ def _restart(reason: str):
 
 
 async def ble_loop():
+    quick_fail = 0   # consecutive connections that dropped almost immediately
+    notfound = 0     # consecutive scans that found nothing
     while True:
         try:
             dev = await find_dev()
             if not dev:
-                # Device legitimately absent (off / out of range): keep scanning in
-                # THIS process — a fresh one wouldn't help, and exiting here would
-                # just thrash launchd while the device is away.
-                print("[ble] device not found; scanning...", flush=True)
+                notfound += 1
+                print(f"[ble] device not found; scanning... ({notfound})", flush=True)
+                # Genuine CoreBluetooth scan wedge: nothing found for a long stretch
+                # even though the device should be there -> a fresh process is the
+                # only known cure (~5 min of 10s-scan + 3s-sleep).
+                if notfound >= 24:
+                    _restart("scan wedged (no device for too long)")
                 await asyncio.sleep(3.0)
                 continue
+            notfound = 0
             print(f"[ble] found {dev.name} [{dev.address}], connecting...", flush=True)
+            t0 = time.monotonic()
             async with BleakClient(dev) as client:
                 print(f"[ble] connected={client.is_connected}", flush=True)
                 try:
@@ -433,11 +440,25 @@ async def ble_loop():
                     try:
                         await client.write_gatt_char(NUS_RX, line, response=True)
                     except Exception as e:
-                        _restart(f"write failed ({e})")
+                        print(f"[ble] write failed ({e})", flush=True)
+                        break
                     await asyncio.sleep(PUSH_PERIOD)
-            _restart("link dropped")
+            # Link ended. Reconnect IN-PROCESS — restarting doesn't fix a flaky link
+            # and just thrashes launchd (we saw 70 restarts). Back off if it dropped
+            # almost immediately so we don't tight-loop connect/drop.
+            dur = time.monotonic() - t0
+            if dur < 8:
+                quick_fail += 1
+                backoff = min(30.0, 2.0 ** quick_fail)
+                print(f"[ble] link dropped after {dur:.1f}s (x{quick_fail}); retry in {backoff:.0f}s", flush=True)
+                await asyncio.sleep(backoff)
+            else:
+                quick_fail = 0
+                print(f"[ble] link dropped after {dur:.0f}s; reconnecting", flush=True)
+                await asyncio.sleep(1.0)
         except Exception as e:
-            _restart(f"link error: {e!r}")
+            print(f"[ble] link error: {e!r}; reconnecting in 3s", flush=True)
+            await asyncio.sleep(3.0)
 
 
 async def main():
