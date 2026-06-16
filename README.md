@@ -1,6 +1,6 @@
 # 🚦 Claude Code Desk Buddy — your terminal, on a desk toy (now with real traffic lights)
 
-Turn a pocket-size **M5StickC Plus S3** into a live, glanceable dashboard for your
+Turn a pocket-size **M5Stack StickS3** into a live, glanceable dashboard for your
 **Claude Code** sessions — and, optionally, a desktop **traffic-light tower** that
 flips **🟢 green / 🟡 yellow / 🔴 red** so you know when Claude is working, idle, or
 needs you **without looking at your screen**.
