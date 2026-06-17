@@ -1,6 +1,7 @@
 #include "m5_compat.h"
 #include <LittleFS.h>
 #include <stdarg.h>
+#include "esp_task_wdt.h"
 #include "ble_bridge.h"
 #include "data.h"
 #include "buddy.h"
@@ -829,9 +830,13 @@ static uint8_t wrapInto(const char* in, char out[][24], uint8_t maxRows, uint8_t
     }
     if (col > 1 || (col == 1 && out[row][0] != ' ')) out[row][col++] = ' ';
     else if (col == 1 && row > 0) {}           // already have the indent space
-    // hard-break words that still don't fit
-    while (wlen > width - col) {
+    // hard-break words that still don't fit. Guard `col < width` so the
+    // `width - col` below never underflows (uint8_t wraps to ~255), which
+    // would turn `take` into a giant memcpy and corrupt memory past the
+    // 24-byte row — a hang/crash fed straight from bridge transcript text.
+    while (col < width && wlen > (uint8_t)(width - col)) {
       uint8_t take = width - col;
+      if (take > wlen) take = wlen;            // never copy past the word
       memcpy(&out[row][col], w, take); col += take; w += take; wlen -= take;
       out[row][col] = 0;
       if (++row >= maxRows) return row;
@@ -1258,9 +1263,18 @@ void setup() {
   }
 
   Serial.printf("buddy: %s\n", buddyMode ? "ASCII mode" : "GIF character loaded");
+
+  // Self-heal watchdog: if loop() ever wedges (e.g. a corrupt render path),
+  // the BLE stack task keeps ACKing writes so the bridge sees a healthy link
+  // while the screen is frozen — only a manual power-cycle recovered it.
+  // Subscribe the loop task to the TWDT with panic=reboot so any >12s stall
+  // reboots the device, which then re-advertises and the bridge reconnects.
+  esp_task_wdt_init(12, true);   // 12s timeout, panic+reboot on elapse
+  esp_task_wdt_add(NULL);        // watch this (loop) task
 }
 
 void loop() {
+  esp_task_wdt_reset();   // pet the watchdog; loop normally cycles <100ms
   M5.update();
   t++;
   uint32_t now = millis();
