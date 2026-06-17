@@ -46,6 +46,7 @@ SESSIONS: dict[str, dict] = {}
 # position) while shown, but is evicted when a more-active session pushes it out
 # of the top-3-by-activity. None = empty slot. See aggregate().
 SLOTS: list = [None, None, None]
+_SLOTLOG: dict = {"sig": None}   # last logged slot signature (change-only [slots] log)
 
 # Ghostty tab ordering (opt-in, auto): when a session reports it runs under
 # Ghostty (term=="ghostty" + a tty), the 3-light strip is ordered by Ghostty
@@ -375,6 +376,12 @@ def aggregate() -> dict:
                         break
     sessions = [states[SLOTS[i]] if SLOTS[i] is not None else "none"
                 for i in range(3)]
+    sig = tuple(SLOTS)
+    if sig != _SLOTLOG["sig"]:           # change-only diagnostic: slot -> sid/state/tab
+        _SLOTLOG["sig"] = sig
+        dump = [f"{x[:4]}:{states.get(x)}:{GHOSTTY_MAP.get(SESSIONS[x].get('tty',''))}"
+                if x else "-" for x in SLOTS]
+        print(f"[slots] {dump}", flush=True)
 
     frame = {"total": total, "running": running, "waiting": waiting,
              "approval": approval, "msg": msg, "tokens": tokens,
