@@ -55,9 +55,6 @@ def current_tty() -> str:
 # Wait at most this long for a device decision before falling back to the native
 # interactive prompt. Must be < the hook's timeout in settings.json.
 PERMISSION_WAIT = 40.0
-ASK_WAIT = 30.0          # per-question wait for an AskUserQuestion device pick
-                         # (long is fine — the "terminal" escape row falls back
-                         # to the keyboard instantly; this only bounds walk-away)
 
 
 def post(obj: dict):
@@ -131,62 +128,21 @@ def count_output_tokens(path: str) -> int:
     return total
 
 
-def ask_device(sid: str, qid: str, header: str, options: list, proj: str = ""):
-    """Relay a multiple-choice question to the device. Returns the chosen option
-    index, or None to fall back to the native terminal picker (escape / timeout /
-    no bridge)."""
-    try:
-        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        s.settimeout(ASK_WAIT)
-        s.connect(SOCK_PATH)
-        s.sendall((json.dumps({"evt": "ask", "sid": sid, "id": qid, "proj": proj,
-                               "header": header, "opts": options}) + "\n").encode())
-        buf = b""
-        while b"\n" not in buf:
-            chunk = s.recv(256)
-            if not chunk:
-                return None
-            buf += chunk
-        s.close()
-        obj = json.loads(buf.split(b"\n", 1)[0].decode())
-        if obj.get("escape"):
-            return None
-        return obj.get("index")
-    except Exception:
-        return None
-
-
 def handle_ask(data: dict):
-    """Intercept AskUserQuestion: answer each question on the device. Any escape/
-    timeout/multiSelect falls back to the native picker (no stdout)."""
+    """AskUserQuestion: do NOT answer on the device and do NOT block the CLI.
+    Picking multiple-choice on the StickS3 proved too fiddly, so we just fire a
+    one-way heads-up to the bridge (which project + what question) and let Claude
+    Code's native terminal picker handle the answer as usual — nothing is printed,
+    so the picker shows immediately and the CLI is never blocked."""
     ti = data.get("tool_input", {}) or {}
     questions = ti.get("questions") or []
-    sid = data.get("session_id", "")
-    proj = os.path.basename(data.get("cwd", "") or "")   # which project is asking
-    answers = {}
-    for i, q in enumerate(questions):
-        opts = [o.get("label", "") for o in (q.get("options") or []) if o.get("label")]
-        if q.get("multiSelect") or not opts:
-            return                      # v1: single-select only → native picker
-        header = (q.get("header") or q.get("question", ""))[:21]
-        qid = f"{sid[:8]}-a{i}-{int(time.time() * 1000) % 100000}"
-        idx = ask_device(sid, qid, header, opts[:4], proj)
-        if idx is None or not (0 <= idx < len(opts)):
-            return                      # escape/timeout → native picker
-        answers[q.get("question", "")] = opts[idx]
-    if not answers:
+    if not questions:
         return
-    # updatedInput.answers does NOT pre-answer AskUserQuestion (the picker still
-    # shows). Instead DENY the tool and hand the device's selection back to the
-    # model via the reason, so it proceeds without re-asking.
-    parts = [f"“{q}” → “{a}”" for q, a in answers.items()]
-    reason = ("Answered on the hardware buddy: " + "; ".join(parts)
-              + ". Treat these as the user's answers and continue; do not ask again.")
-    print(json.dumps({"hookSpecificOutput": {
-        "hookEventName": "PreToolUse",
-        "permissionDecision": "deny",
-        "permissionDecisionReason": reason,
-    }}))
+    q = (questions[0].get("question") or questions[0].get("header") or "")
+    post({"evt": "asknote",
+          "sid": data.get("session_id", ""),
+          "cwd": os.path.basename(data.get("cwd", "") or ""),
+          "q": q.replace("\n", " ").strip()[:48]})
 
 
 def summarize(tool: str, ti) -> str:

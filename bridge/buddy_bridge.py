@@ -227,10 +227,19 @@ def apply_event(ev: dict):
         s["state"] = "running"           # whole turn counts as busy (our redefine)
         s["awaiting"] = False            # you replied → clear the awaiting border
         s["asking"] = False              # you replied → clear any pending question
+        s["question"] = False            # and any pending AskUserQuestion heads-up
     elif evt == "idle":
         s["state"] = "idle"              # turn ended (border waits for idle_prompt)
         s["asking"] = bool(ev.get("asking"))  # heuristic: turn ended on a question
+        s["question"] = False            # answered in the terminal by now
         ONESHOT["completed"] = True      # brief celebrate, like the desktop app
+    elif evt == "asknote":
+        # AskUserQuestion fired: NOT answered on the device anymore — just a heads-up.
+        # Mark the session so its light goes red and the status line shows which
+        # project asked what; one-shot chime so you notice. Cleared on next run/idle.
+        s["question"] = True
+        s["askq"] = str(ev.get("q", ""))[:48]
+        ONESHOT["nudge"] = True
     elif evt == "notify":
         nt = ev.get("ntype", "")
         if nt == "idle_prompt":
@@ -256,6 +265,7 @@ def aggregate() -> dict:
     ask_sids  = {a.get("sid") for a in ASK.values() if a.get("sid")}
     def classify(sid, s):
         if sid in perm_sids:          return "perm"   # permission prompt -> red
+        if s.get("question"):         return "wait"   # pending AskUserQuestion -> red (even mid-run)
         if s["state"] == "running":   return "run"    # processing -> green
         if sid in ask_sids:           return "wait"   # on-screen question -> red
         if s.get("asking"):           return "wait"   # ended on a question (heuristic) -> red
@@ -266,8 +276,12 @@ def aggregate() -> dict:
     running  = sum(1 for v in states.values() if v == "run")    # green
     waiting  = sum(1 for v in states.values() if v == "wait")   # yellow: awaiting input
     approval = sum(1 for v in states.values() if v == "perm")   # red: needs approval
+    q_sid = next((sid for sid, s in SESSIONS.items() if s.get("question")), None)
     if total == 0:
         msg = "no sessions"
+    elif q_sid:                          # AskUserQuestion heads-up: which project + what
+        qs = SESSIONS[q_sid]
+        msg = (f"Q {qs.get('label', '')}: {qs.get('askq', '')}").strip()[:48]
     elif running:
         lbl = next((s["label"] for sid, s in SESSIONS.items()
                     if states[sid] == "run" and s["label"]), "")
