@@ -478,6 +478,12 @@ async def socket_server():
 
 
 # ── BLE push loop (bridge → device) ──────────────────────────────────────────
+# Current BLE client for sending replies to stale asks
+_CURRENT_BLE_CLIENT = None
+# Event loop for scheduling async tasks from sync callbacks
+_EVENT_LOOP = None
+
+
 def on_tx(_char, data: bytearray):
     # Device → host. The buddy notifies a permission decision when you press
     # A (approve) or B (deny) on the approval screen.
@@ -507,6 +513,19 @@ def on_tx(_char, data: bytearray):
         idx = obj.get("index")
         a = ASK.pop(aid, None)
         if a is None:
+            # Stale ask from device's queue (e.g. after reconnect). Reply with
+            # escape so the device clears it and doesn't keep waiting.
+            print(f"[ask] id={aid} stale -> escape (clear device queue)", flush=True)
+            # Schedule async reply via event loop
+            if _EVENT_LOOP and _CURRENT_BLE_CLIENT:
+                async def send_escape():
+                    try:
+                        if _CURRENT_BLE_CLIENT.is_connected:
+                            reply = (json.dumps({"escape": True}) + "\n").encode()
+                            await _CURRENT_BLE_CLIENT.write_gatt_char(NUS_RX, reply, response=True)
+                    except Exception as e:
+                        print(f"[ask] escape reply failed: {e}", flush=True)
+                asyncio.run_coroutine_threadsafe(send_escape(), _EVENT_LOOP)
             return
         # index 255 (the "terminal" escape row) → no answer, fall back to picker.
         payload = {"escape": True} if idx == 255 else {"index": int(idx)}
@@ -538,6 +557,8 @@ def _restart(reason: str):
 
 
 async def ble_loop():
+    global _CURRENT_BLE_CLIENT, _EVENT_LOOP
+    _EVENT_LOOP = asyncio.get_running_loop()
     quick_fail = 0   # consecutive connections that dropped almost immediately
     notfound = 0     # consecutive scans that found nothing
     while True:
@@ -557,6 +578,7 @@ async def ble_loop():
             print(f"[ble] found {dev.name} [{dev.address}], connecting...", flush=True)
             t0 = time.monotonic()
             async with BleakClient(dev) as client:
+                _CURRENT_BLE_CLIENT = client
                 print(f"[ble] connected={client.is_connected}", flush=True)
                 try:
                     await client.start_notify(NUS_TX, on_tx)
@@ -582,6 +604,7 @@ async def ble_loop():
                         print(f"[ble] write failed ({e})", flush=True)
                         break
                     await asyncio.sleep(PUSH_PERIOD)
+                _CURRENT_BLE_CLIENT = None
             # Link ended. Reconnect IN-PROCESS — restarting doesn't fix a flaky link
             # and just thrashes launchd (we saw 70 restarts). Back off if it dropped
             # almost immediately so we don't tight-loop connect/drop.
@@ -596,6 +619,7 @@ async def ble_loop():
                 print(f"[ble] link dropped after {dur:.0f}s; reconnecting", flush=True)
                 await asyncio.sleep(1.0)
         except Exception as e:
+            _CURRENT_BLE_CLIENT = None
             print(f"[ble] link error: {e!r}; reconnecting in 3s", flush=True)
             await asyncio.sleep(3.0)
 
