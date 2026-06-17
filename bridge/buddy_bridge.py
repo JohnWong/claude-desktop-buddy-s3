@@ -537,12 +537,19 @@ async def ghostty_map_loop():
     runs under Ghostty. With no Ghostty session, osascript is never invoked (no
     Automation prompt, zero behavior change for non-Ghostty users)."""
     global GHOSTTY_MAP
+    last = None
     while True:
-        if any(s.get("term") == "ghostty" and s.get("tty")
-               for s in SESSIONS.values()):
+        ng = sum(1 for s in SESSIONS.values()
+                 if s.get("term") == "ghostty" and s.get("tty"))
+        if ng:
             GHOSTTY_MAP = await asyncio.to_thread(_read_ghostty_map)
         elif GHOSTTY_MAP:
             GHOSTTY_MAP = {}
+        sig = (ng, len(GHOSTTY_MAP))
+        if sig != last:
+            print(f"[ghostty] sessions={ng} map={len(GHOSTTY_MAP)} {GHOSTTY_MAP}",
+                  flush=True)
+            last = sig
         await asyncio.sleep(GHOSTTY_MAP_PERIOD)
 
 
