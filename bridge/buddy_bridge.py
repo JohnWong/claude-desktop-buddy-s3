@@ -313,8 +313,8 @@ def aggregate() -> dict:
     ask_sids  = {a.get("sid") for a in ASK.values() if a.get("sid")}
     def classify(sid, s):
         if sid in perm_sids:          return "perm"   # permission prompt -> red
+        if s["state"] == "running":   return "run"    # processing -> green (overrides question)
         if s.get("question"):         return "wait"   # pending AskUserQuestion -> red (even mid-run)
-        if s["state"] == "running":   return "run"    # processing -> green
         if sid in ask_sids:           return "wait"   # on-screen question -> red
         if s.get("asking"):           return "wait"   # ended on a question (heuristic) -> red
         return "idle"                                  # idle / passive wait -> yellow
