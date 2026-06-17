@@ -37,6 +37,28 @@ Claude Code falls back to its native interactive prompt. The device prompt is
 auto-cancelled when the hook closes. The firmware needs **no changes** — it
 already renders the prompt and emits `{"cmd":"permission","id","decision"}`.
 
+## Ghostty tab ordering (auto, opt-in)
+When sessions run under **Ghostty**, the 3-light strip (and home screen) orders
+the shown sessions by **Ghostty tab position** instead of seating order — tab 1
+before tab 2 …, and within a tab (splits) by a fixed split index.
+
+How it works: the hook reports each session's controlling `tty` + `TERM_PROGRAM`
+on start/run. While any Ghostty session exists, the bridge maps `tty → (window,
+tab, split)` via Ghostty's AppleScript dictionary (`osascript`, refreshed every
+3s) and sorts by that. (`GHOSTTY_SURFACE_ID` is *not* usable — it doesn't match
+the scripting IDs; `tty` is the stable join key.)
+
+- **Non-Ghostty is unaffected:** with no `ghostty` session the bridge never calls
+  `osascript` and keeps the original fixed-slot behavior.
+- **Graceful fallback:** if Automation permission isn't granted (or Ghostty is
+  too old to have the dictionary), the map is empty and it falls back silently.
+- **Permission:** `osascript` controlling Ghostty needs macOS **Automation**
+  permission. A launchd background agent may not get the prompt, so grant it once
+  by running the bridge in the foreground from Ghostty —
+  `~/.pio-venv/bin/python bridge/buddy_bridge.py` — and approving the "control
+  Ghostty" dialog (recorded in System Settings → Privacy & Security → Automation;
+  the same python path is then honored under launchd).
+
 ## Setup
 1. Install the bridge as a launchd agent (auto-start + restart on crash):
    ```
@@ -67,6 +89,7 @@ already renders the prompt and emits `{"cmd":"permission","id","decision"}`.
    press **A/B** to decide; the session ends → `total` drops.
 
 ## Privacy
-Only counts, the coarse event, the notification type, and the **cwd basename**
-ever leave the host. No prompt text, tool input, file contents, diffs, or
-transcript is sent to the device.
+Only counts, the coarse event, the notification type, the **cwd basename**, and
+(for tab ordering) the session's **tty + `TERM_PROGRAM`** ever leave the hook —
+and the tty/term go only to the local bridge, never to the device. No prompt
+text, tool input, file contents, diffs, or transcript is sent.

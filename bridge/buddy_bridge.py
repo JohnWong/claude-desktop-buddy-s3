@@ -21,6 +21,7 @@ Run:  ~/.pio-venv/bin/python bridge/buddy_bridge.py
 import asyncio
 import json
 import os
+import subprocess
 import time
 
 from bleak import BleakClient, BleakScanner
@@ -45,6 +46,59 @@ SESSIONS: dict[str, dict] = {}
 # position) while shown, but is evicted when a more-active session pushes it out
 # of the top-3-by-activity. None = empty slot. See aggregate().
 SLOTS: list = [None, None, None]
+
+# Ghostty tab ordering (opt-in, auto): when a session reports it runs under
+# Ghostty (term=="ghostty" + a tty), the 3-light strip is ordered by Ghostty
+# (window, tab, split) instead of seating order — i.e. by TAB position, with a
+# fixed intra-tab order for splits. Built from Ghostty's AppleScript dictionary
+# (tty is the stable join key; GHOSTTY_SURFACE_ID env does NOT map to it). The
+# map is refreshed only while a Ghostty session exists, so non-Ghostty setups
+# never invoke osascript and keep the original fixed-slot behavior untouched.
+GHOSTTY_MAP: dict = {}          # "/dev/ttysNNN" -> (window_idx, tab_idx, split_idx)
+GHOSTTY_MAP_PERIOD = 3.0        # seconds between tty->tab refreshes (while active)
+_GHOSTTY_OSA = r'''
+set out to ""
+tell application "Ghostty"
+  set wi to 0
+  repeat with w in windows
+    set wi to wi + 1
+    set ti to 0
+    repeat with t in tabs of w
+      set ti to ti + 1
+      set si to 0
+      repeat with s in terminals of t
+        set si to si + 1
+        set out to out & (tty of s) & "\t" & wi & "\t" & ti & "\t" & si & "\n"
+      end repeat
+    end repeat
+  end repeat
+end tell
+return out
+'''
+
+
+def _read_ghostty_map() -> dict:
+    """tty -> (window_idx, tab_idx, split_idx) via Ghostty's scripting dictionary.
+    Blocking (run in a thread). Returns {} on any failure — no Ghostty, an older
+    Ghostty without the dictionary, or Automation permission not granted — so the
+    caller transparently falls back to the non-Ghostty ordering."""
+    try:
+        r = subprocess.run(["osascript", "-e", _GHOSTTY_OSA],
+                           capture_output=True, text=True, timeout=3.0)
+    except Exception:
+        return {}
+    if r.returncode != 0:
+        return {}
+    m: dict = {}
+    for ln in r.stdout.splitlines():
+        f = ln.split("\t")
+        if len(f) != 4 or not f[0].startswith("/dev/"):
+            continue
+        try:
+            m[f[0]] = (int(f[1]), int(f[2]), int(f[3]))
+        except ValueError:
+            continue
+    return m
 
 # Pending permission requests: id -> {"writer", "tool", "hint"}. A hook connection
 # stays open while its prompt is pending; the device's A/B decision (or the hook
@@ -159,6 +213,10 @@ def apply_event(ev: dict):
     s = touch(sid)
     if "cwd" in ev:
         s["label"] = ev["cwd"]
+    if ev.get("tty"):
+        s["tty"] = ev["tty"]            # stable per-session key for Ghostty ordering
+    if ev.get("term"):
+        s["term"] = ev["term"]          # TERM_PROGRAM (e.g. "ghostty")
     if "tokens" in ev:
         SESSION_TOKENS[sid] = int(ev["tokens"])
         ledger_add(sid, int(ev["tokens"]))
@@ -229,18 +287,31 @@ def aggregate() -> dict:
             SLOTS[i] = None
     ranked = [sid for sid, _ in sorted(SESSIONS.items(),
                                        key=lambda kv: kv[1]["seen"], reverse=True)]
-    top = set(ranked[:3])
-    for i in range(3):                                    # evict the ones bumped out
-        if SLOTS[i] is not None and SLOTS[i] not in top:
-            SLOTS[i] = None
-    slotted = {s for s in SLOTS if s is not None}
-    for sid in ranked[:3]:                                # seat newcomers in free slots
-        if sid not in slotted:
-            for i in range(3):
-                if SLOTS[i] is None:
-                    SLOTS[i] = sid
-                    slotted.add(sid)
-                    break
+    top3 = ranked[:3]                                     # the 3 most-active sessions
+    # Order the 3 shown sessions. If any maps to a Ghostty terminal, order ALL of
+    # them by (window, tab, split) — tab order, with a fixed intra-tab order for
+    # splits; unmapped sessions sort after, keeping their by-recency order (stable
+    # sort). When the map is empty (no Ghostty session, or no permission) fall
+    # back to the original fixed-slot eviction/seating so non-Ghostty is unaffected.
+    gkeys = {sid: GHOSTTY_MAP.get(SESSIONS[sid].get("tty", "")) for sid in top3}
+    if any(gkeys.values()):
+        ordered = sorted(top3, key=lambda sid: (0,) + gkeys[sid] if gkeys[sid]
+                         else (1, 0, 0, 0))
+        for i in range(3):
+            SLOTS[i] = ordered[i] if i < len(ordered) else None
+    else:
+        top = set(top3)
+        for i in range(3):                                # evict the ones bumped out
+            if SLOTS[i] is not None and SLOTS[i] not in top:
+                SLOTS[i] = None
+        slotted = {s for s in SLOTS if s is not None}
+        for sid in top3:                                  # seat newcomers in free slots
+            if sid not in slotted:
+                for i in range(3):
+                    if SLOTS[i] is None:
+                        SLOTS[i] = sid
+                        slotted.add(sid)
+                        break
     sessions = [states[SLOTS[i]] if SLOTS[i] is not None else "none"
                 for i in range(3)]
 
@@ -461,10 +532,24 @@ async def ble_loop():
             await asyncio.sleep(3.0)
 
 
+async def ghostty_map_loop():
+    """Keep GHOSTTY_MAP fresh — but ONLY while at least one session reports it
+    runs under Ghostty. With no Ghostty session, osascript is never invoked (no
+    Automation prompt, zero behavior change for non-Ghostty users)."""
+    global GHOSTTY_MAP
+    while True:
+        if any(s.get("term") == "ghostty" and s.get("tty")
+               for s in SESSIONS.values()):
+            GHOSTTY_MAP = await asyncio.to_thread(_read_ghostty_map)
+        elif GHOSTTY_MAP:
+            GHOSTTY_MAP = {}
+        await asyncio.sleep(GHOSTTY_MAP_PERIOD)
+
+
 async def main():
     print("[bridge] starting (socket + BLE)")
     ledger_load()
-    await asyncio.gather(socket_server(), ble_loop())
+    await asyncio.gather(socket_server(), ble_loop(), ghostty_map_loop())
 
 
 if __name__ == "__main__":

@@ -20,10 +20,37 @@ import json
 import os
 import re
 import socket
+import subprocess
 import sys
 import time
 
 SOCK_PATH = os.path.expanduser("~/.claude-buddy/bridge.sock")
+
+
+def current_tty() -> str:
+    """The session's controlling TTY ('/dev/ttysNNN'), or '' if none. The hook's
+    own fds are pipes, so walk the parent chain to the shell/claude process that
+    owns the terminal. Used only as a stable per-session key for Ghostty tab
+    ordering — nothing sensitive leaves the host. Cheap (one `ps`), best-effort."""
+    try:
+        out = subprocess.run(["ps", "-Ao", "pid=,ppid=,tty="],
+                             capture_output=True, text=True, timeout=1.0).stdout
+    except Exception:
+        return ""
+    pp, tt = {}, {}
+    for ln in out.splitlines():
+        f = ln.split(None, 2)
+        if len(f) == 3:
+            pp[f[0]], tt[f[0]] = f[1], f[2].strip()
+    pid = str(os.getpid())
+    for _ in range(16):
+        dev = tt.get(pid, "")
+        if dev.startswith("ttys"):
+            return "/dev/" + dev
+        pid = pp.get(pid, "")
+        if not pid or pid == "0":
+            break
+    return ""
 
 # Wait at most this long for a device decision before falling back to the native
 # interactive prompt. Must be < the hook's timeout in settings.json.
@@ -207,10 +234,12 @@ def main():
 
     if event == "SessionStart":
         post({"evt": "start", "sid": sid,
-              "cwd": os.path.basename(data.get("cwd", "") or "")})
+              "cwd": os.path.basename(data.get("cwd", "") or ""),
+              "tty": current_tty(), "term": os.environ.get("TERM_PROGRAM", "")})
     elif event == "UserPromptSubmit":
         post({"evt": "run", "sid": sid,
               "cwd": os.path.basename(data.get("cwd", "") or ""),
+              "tty": current_tty(), "term": os.environ.get("TERM_PROGRAM", ""),
               "tpath": data.get("transcript_path", "")})
     elif event == "Stop":
         tpath = data.get("transcript_path", "")
