@@ -128,7 +128,7 @@ def count_output_tokens(path: str) -> int:
     return total
 
 
-def handle_ask(data: dict):
+def handle_ask(data: dict, tty: str = "", term: str = ""):
     """AskUserQuestion: do NOT answer on the device and do NOT block the CLI.
     Picking multiple-choice on the StickS3 proved too fiddly, so we just fire a
     one-way heads-up to the bridge (which project + what question) and let Claude
@@ -142,6 +142,7 @@ def handle_ask(data: dict):
     post({"evt": "asknote",
           "sid": data.get("session_id", ""),
           "cwd": os.path.basename(data.get("cwd", "") or ""),
+          "tty": tty, "term": term,
           "q": q.replace("\n", " ").strip()[:48]})
 
 
@@ -187,29 +188,35 @@ def main():
 
     sid = data.get("session_id", "?")
     event = data.get("hook_event_name", "")
+    # tty + terminal app = the stable per-session key for Ghostty tab ordering.
+    # Attach to EVERY status event so a session's tab is (re)mapped on ANY activity
+    # — not just start/run — so it survives a bridge restart / hook upgrade without
+    # needing a fresh prompt.
+    tty = current_tty()
+    term = os.environ.get("TERM_PROGRAM", "")
 
     if event == "SessionStart":
         post({"evt": "start", "sid": sid,
               "cwd": os.path.basename(data.get("cwd", "") or ""),
-              "tty": current_tty(), "term": os.environ.get("TERM_PROGRAM", "")})
+              "tty": tty, "term": term})
     elif event == "UserPromptSubmit":
         post({"evt": "run", "sid": sid,
               "cwd": os.path.basename(data.get("cwd", "") or ""),
-              "tty": current_tty(), "term": os.environ.get("TERM_PROGRAM", ""),
+              "tty": tty, "term": term,
               "tpath": data.get("transcript_path", "")})
     elif event == "Stop":
         tpath = data.get("transcript_path", "")
-        post({"evt": "idle", "sid": sid,
+        post({"evt": "idle", "sid": sid, "tty": tty, "term": term,
               "tokens": count_output_tokens(tpath),
               "asking": last_assistant_is_question(tpath)})
     elif event == "Notification":
-        post({"evt": "notify", "sid": sid,
+        post({"evt": "notify", "sid": sid, "tty": tty, "term": term,
               "ntype": data.get("notification_type", "")})
     elif event == "SessionEnd":
         post({"evt": "end", "sid": sid})
     elif event == "PreToolUse":
         if data.get("tool_name") == "AskUserQuestion":
-            handle_ask(data)
+            handle_ask(data, tty, term)
         sys.exit(0)                         # no-op for all other tools
     elif event == "PermissionRequest":
         tool = data.get("tool_name", "")

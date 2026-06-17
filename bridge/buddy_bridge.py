@@ -121,6 +121,12 @@ TOKENS_FILE = os.path.join(SOCK_DIR, "tokens.json")
 LEDGER: dict[str, int] = {}
 LEDGER_LAST: dict[str, int] = {}
 
+# Persist the live session registry so a bridge restart (self-heal / reflash /
+# crash) doesn't blank the device until every session re-reports. "seen" is a
+# monotonic clock (process-relative, meaningless across restarts), so we store an
+# absolute wall-clock last-seen and reconstruct "seen" on load.
+SESSIONS_FILE = os.path.join(SOCK_DIR, "sessions.json")
+
 
 def _today() -> str:
     return time.strftime("%Y-%m-%d", time.localtime())
@@ -184,6 +190,45 @@ def now() -> float:
     return time.monotonic()
 
 
+def sessions_save():
+    """Snapshot SESSIONS to disk (atomic). Convert each monotonic `seen` to an
+    absolute wall-clock time so it survives a restart. Best-effort / fail-silent."""
+    try:
+        wall, mono = time.time(), now()
+        out = {}
+        for sid, s in SESSIONS.items():
+            d = dict(s)
+            d["seen_wall"] = wall - (mono - s.get("seen", mono))
+            d.pop("seen", None)
+            out[sid] = d
+        tmp = SESSIONS_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(out, f)
+        os.replace(tmp, SESSIONS_FILE)
+    except Exception:
+        pass
+
+
+def sessions_load():
+    """Restore SESSIONS from the last snapshot, dropping anything older than the
+    TTL and reconstructing the monotonic `seen` relative to this process's clock."""
+    try:
+        with open(SESSIONS_FILE) as f:
+            data = json.load(f)
+    except Exception:
+        return
+    wall, mono = time.time(), now()
+    for sid, d in data.items():
+        sw = d.pop("seen_wall", None)
+        if sw is None:
+            continue
+        age = wall - sw
+        if age < 0 or age > SESSION_TTL:
+            continue                     # stale → don't restore
+        d["seen"] = mono - age           # reconstruct monotonic seen
+        SESSIONS[sid] = d
+
+
 def touch(sid: str) -> dict:
     s = SESSIONS.get(sid)
     if s is None:
@@ -209,6 +254,7 @@ def apply_event(ev: dict):
     if evt == "end":
         SESSIONS.pop(sid, None)
         SESSION_TOKENS.pop(sid, None)
+        sessions_save()
         return
     s = touch(sid)
     if "cwd" in ev:
@@ -247,6 +293,7 @@ def apply_event(ev: dict):
             s["awaiting"] = True         # persistent: drives the amber border
             ONESHOT["nudge"] = True      # one-shot chime the moment it starts
         # permission_prompt handled in M3 (waiting + prompt relay)
+    sessions_save()                      # persist so a restart doesn't blank the device
 
 
 def aggregate() -> dict:
@@ -570,6 +617,8 @@ async def ghostty_map_loop():
 async def main():
     print("[bridge] starting (socket + BLE)")
     ledger_load()
+    sessions_load()                      # restore live sessions across restarts
+    print(f"[bridge] restored {len(SESSIONS)} session(s) from snapshot")
     await asyncio.gather(socket_server(), ble_loop(), ghostty_map_loop())
 
 
