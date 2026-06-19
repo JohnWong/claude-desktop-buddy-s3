@@ -1,0 +1,16 @@
+BLItemNo,ElementId,LdrawId,PartName,BLColorId,LDrawColorId,ColorName,ColorCategory,Qty,Weight,
+18651,6089119,18651.dat,"Technic, Axle  2L with Pin with Friction Ridges ",11,0,Black,Solid Colors,2,0.32,
+3001,300121,3001.dat,Brick 2 x 4,5,4,Red,Solid Colors,12,2.32,
+3007,6033776,3007.dat,Brick 2 x 8,1,15,White,Solid Colors,10,4.75,
+3039,303928,3039.dat,Slope 45 2 x 2,6,2,Green,Solid Colors,4,1.15,optional
+4265c,4110050,32123a.dat,Technic Bush 1/2 Smooth,9,7,Light Gray,Solid Colors,6,0.1,
+33183,4119479,33183.dat,Plant Stem with Bar (Carrot Top / Twig),36,10,Bright Green,Solid Colors,1,0.16,optional
+3660,4142717,3660b.dat,"Slope, Inverted 45 2 x 2 with Flat Bottom Pin ",6,2,Green,Solid Colors,4,1.25,
+3702,370221,3702.dat,"Technic, Brick 1 x 8 with Holes ",5,4,Red,Solid Colors,1,2.85,
+3703,370321,3703.dat,"Technic, Brick 1 x 16 with Holes ",5,4,Red,Solid Colors,2,5.87,
+3895,389521,3895.dat,"Technic, Brick 1 x 12 with Holes ",5,4,Red,Solid Colors,2,4.2,
+bb1241,,42865.dat,"Technic, Pin with Fixed Rotatable Friction ",11,0,Black,Solid Colors,4,0.25,
+43093,4184170,43093.dat,"Technic, Axle  1L with Pin with Friction Ridges ",11,0,Black,Solid Colors,8,0.26,optional
+44728,6117940,44728.dat,Bracket 1 x 2 - 2 x 2,1,15,White,Solid Colors,1,0.8,optional
+49283,,49283.dat,"Technic, Axle and Wire Connector ",241,371,Medium Tan,Solid Colors,2,0.4,
+99207,6097637,99207.dat,Bracket 1 x 2 - 2 x 2 Inverted,1,15,White,Solid Colors,1,0.8,optional
