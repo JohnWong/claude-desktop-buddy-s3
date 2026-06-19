@@ -8,7 +8,7 @@ needs you **without looking at your screen**.
 **No desktop app. No cloud.** Just your terminal + a tiny local Bluetooth bridge.
 
 <p align="center">
-  <img src="docs/IMG_6969.jpg" alt="LEGO traffic-light tower driven by Claude Code session state" width="320">
+  <img src="docs/IMG_6979.jpg" alt="LEGO traffic-light tower driven by Claude Code session state" width="320">
 </p>
 
 ---
@@ -54,8 +54,9 @@ Middle: the pet's stats after a few approvals. Right: the hardware ID page.
 3. Open a `claude` session → the device lights up. Submit a prompt → **🟢 green**.
    A tool needs approval → it flashes **🔴 red**; press **A / B** to decide.
 
-**Hardware:** [M5StickC Plus S3](https://shop.m5stack.com/) (ESP32-S3). Optional tower:
-M5Stack **PbHub** + 3× **HS-F05-L** traffic-light modules (all LEGO-Technic mountable).
+**Hardware:** [M5StickC Plus S3](https://shop.m5stack.com/) (ESP32-S3) + M5Stack **Clip B**
+(desk mount). Optional tower: M5Stack **PbHub** + 3× **HS-F05-L** traffic-light modules
+(all LEGO-Technic mountable).
 
 > **Building your own device?** You don't need this firmware. See **[REFERENCE.md](REFERENCE.md)**
 > for the wire protocol: Nordic UART Service UUIDs, JSON schemas, and the folder push transport.
