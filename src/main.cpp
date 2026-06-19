@@ -804,7 +804,7 @@ void drawInfo() {
     spr.setTextColor(p.textDim, p.bg);
     ln("hardware");
     y += 4;
-    ln("M5StickC Plus S3");
+    ln("M5StickS3");
     ln("ESP32-S3 + BMI270");
   }
 }

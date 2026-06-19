@@ -14,7 +14,7 @@ REACT 反应竞速游戏复用为发车灯。本文件汇总**经硬件自检验
 
 | 配件 | 数量 | 用途 |
 |---|---|---|
-| M5StickC Plus S3（StickS3） | 1 | 主机（ESP32-S3） |
+| M5StickS3（StickS3） | 1 | 主机（ESP32-S3） |
 | M5Stack Clip B | 1 | 桌面支架/夹持 |
 | Unit PbHub v1.1 | 1 | I2C 扩展，驱动交通灯 |
 | HS-F05-L 交通灯 LED 模块 | 3 | 红/黄/绿三色灯 |
@@ -38,7 +38,7 @@ REACT 反应竞速游戏复用为发车灯。本文件汇总**经硬件自检验
 ## 1. 拓扑
 
 ```
-StickS3 (M5StickC Plus S3)
+StickS3 (M5StickS3)
    │  Grove A 口 / HY2.0-4P，I2C 主机（防呆，直插）
    ▼
 PbHub v1.1 (I2C 从机, 地址 0x61)
@@ -57,7 +57,7 @@ PbHub v1.1 (I2C 从机, 地址 0x61)
 
 | 件 | 说明 |
 |---|---|
-| StickS3 | M5StickC Plus S3（ESP32-S3，8MB/8MB，135×240，BMI270） |
+| StickS3 | M5StickS3（ESP32-S3，8MB/8MB，135×240，BMI270） |
 | PbHub | Unit PbHub v1.1（STM32F030，I2C 0x61，支持数字读写/PWM/WS2812） |
 | 交通灯 ×3 | **HS-F05-L** LED 模块，55×16mm，4 针**排针顺序 GND·GR·YE·RE**，共阴，每路一颗 LED；板上 2 个 Ø4.7mm 安装孔，孔距 8mm（= 乐高 Technic 孔，可直接用十字轴固定） |
 | Grove 线 ×1 | StickS3↔PbHub，HY2.0-4P，防呆直插 |

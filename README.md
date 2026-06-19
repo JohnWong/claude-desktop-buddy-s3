@@ -37,7 +37,7 @@ needs you **without looking at your screen**.
 <p align="center">
   <img src="docs/s3/approval.jpg" alt="Live approval prompt on the device" width="220">
   <img src="docs/s3/pet-stats.jpg" alt="Pet stats: mood, energy, level, token counters" width="220">
-  <img src="docs/s3/credits.jpg" alt="Credits page: M5StickC Plus S3 / ESP32-S3 + BMI270" width="220">
+  <img src="docs/s3/credits.jpg" alt="Credits page: M5StickS3 / ESP32-S3 + BMI270" width="220">
 </p>
 
 Left: a live `Bash` approval prompt — **A approves, B denies, right on the device.**
@@ -54,7 +54,7 @@ Middle: the pet's stats after a few approvals. Right: the hardware ID page.
 3. Open a `claude` session → the device lights up. Submit a prompt → **🟢 green**.
    A tool needs approval → it flashes **🔴 red**; press **A / B** to decide.
 
-**Hardware:** [M5StickC Plus S3](https://shop.m5stack.com/) (ESP32-S3) + M5Stack **Clip B**
+**Hardware:** [M5StickS3](https://shop.m5stack.com/) (ESP32-S3) + M5Stack **Clip B**
 (desk mount). Optional tower: M5Stack **PbHub** + 3× **HS-F05-L** traffic-light modules
 (all LEGO-Technic mountable).
 
@@ -158,7 +158,7 @@ tools/            — generators and converters
 ---
 
 > **Unofficial fork.** Ports the upstream firmware from the original M5StickC Plus (ESP32)
-> to the **M5StickC Plus S3** (ESP32-S3), adds the **Claude Code CLI bridge** (no desktop
+> to the **M5StickS3** (ESP32-S3), adds the **Claude Code CLI bridge** (no desktop
 > app) and the **PbHub traffic-light** integration. Upstream doesn't accept board-port PRs —
 > see [CONTRIBUTING.md](CONTRIBUTING.md). Protocol reference and original board support:
 > [anthropics/claude-desktop-buddy](https://github.com/anthropics/claude-desktop-buddy).

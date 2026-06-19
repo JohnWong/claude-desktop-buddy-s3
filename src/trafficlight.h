@@ -6,7 +6,7 @@
 // PbHub-driven physical traffic lights — the external twin of the on-screen
 // session strip.
 //
-//   M5StickC Plus S3 --Grove/I2C--> PbHub (0x61) --> 3x 4-pin traffic-light
+//   M5StickS3 --Grove/I2C--> PbHub (0x61) --> 3x 4-pin traffic-light
 //   modules (GND/RE/YE/GR, common-cathode: drive a signal HIGH = that LED on).
 //
 // 9 signal lines spread over 5 PbHub channels — CH3 is skipped (awkward to
