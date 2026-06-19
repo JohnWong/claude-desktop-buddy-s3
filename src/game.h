@@ -34,14 +34,15 @@ enum { GS_PICKER = 0, GS_PLAY = 1 };
 static int gScreen = GS_PICKER;
 static int gSel    = 0;     // picker cursor
 static int gGame   = 0;     // active game index
-static const char* GAME_NAMES[] = { "MAZE", "SLOTS", "RACER", "REACT" };
-static const int   GAME_N = 4;
+static const char* GAME_NAMES[] = { "MAZE", "SLOTS", "RACER", "REACT", "TETRIS" };
+static const int   GAME_N = 5;
 
 // Forward decls for per-game lifecycles.
 static void gMazeInit();  static void gMazeTick();  static void gMazeA();
 static void gSlotInit();  static void gSlotTick();  static void gSlotA();
 static void gRaceInit();  static void gRaceTick();  static void gRaceA();
 static void gReactInit(); static void gReactTick(); static void gReactA();
+static void gTetrisInit(); static void gTetrisTick(); static void gTetrisA();
 
 // ===========================================================================
 // Game 1 — Tilt-ball maze
@@ -764,6 +765,302 @@ static void gReactTick() {
 }
 
 // ===========================================================================
+// Optional I2C joystick on the Grove port (auto-detected, shared by games)
+// ===========================================================================
+// Works with the M5 Joystick Unit (0x52, register-less x/y/btn bytes) and the
+// Joystick2 Unit (0x63, 8-bit regs 0x10/0x11). Center is calibrated at game
+// start (handles drift / both center-128 firmwares). If neither is present we
+// fall back to IMU tilt for left/right so the game still plays.
+static const uint32_t JS_FREQ = 100000;
+static int  jsKind = -1;       // -1 unprobed, 0 none, 1 Joystick(0x52), 2 Joystick2(0x63)
+static int  jsCx = 128, jsCy = 128;     // calibrated rest center
+static const int  JS_THR = 40;          // dead-zone radius (raw 0..255)
+static const bool JS_SWAP_XY = true;    // unit mounted rotated 90° -> swap axes
+static const bool JS_INV_X = false;     // flip if left/right come out reversed
+static const bool JS_INV_Y = true;      // flip if up/down come out reversed
+// On-screen calibration overlay (raw stick + button levels). Set false once
+// the axes/buttons are dialed in.
+static const bool TET_DEBUG = false;
+
+static void jsProbe() {
+  M5.Ex_I2C.begin();                     // harmless if already begun by tlBegin
+  if      (M5.Ex_I2C.scanID(0x63, JS_FREQ)) jsKind = 2;
+  else if (M5.Ex_I2C.scanID(0x52, JS_FREQ)) jsKind = 1;
+  else    jsKind = 0;
+}
+static bool jsReadRaw(int* x, int* y) {
+  if (jsKind == 2) {
+    *x = M5.Ex_I2C.readRegister8(0x63, 0x10, JS_FREQ);
+    *y = M5.Ex_I2C.readRegister8(0x63, 0x11, JS_FREQ);
+    return true;
+  }
+  if (jsKind == 1) {
+    uint8_t b[3] = { 128, 128, 0 };
+    if (!M5.Ex_I2C.start(0x52, true, JS_FREQ)) { M5.Ex_I2C.stop(); return false; }
+    M5.Ex_I2C.read(b, 3);
+    M5.Ex_I2C.stop();
+    *x = b[0]; *y = b[1];
+    return true;
+  }
+  return false;
+}
+static void jsCalibrate() {
+  if (jsKind < 0) jsProbe();
+  int x = 128, y = 128;
+  if (jsReadRaw(&x, &y)) { jsCx = x; jsCy = y; }
+}
+// Quantise the stick to {-1,0,1} per axis (with dead-zone). No joystick -> use
+// IMU tilt for the X axis only (Y stays 0, so gravity still drops the piece).
+static void jsDir(int* dx, int* dy) {
+  *dx = 0; *dy = 0;
+  int x, y;
+  if (!jsReadRaw(&x, &y)) {
+    float ax, ay, az; compat::getAccel(&ax, &ay, &az); (void)ax; (void)az;
+    if      (ay >  0.35f) *dx = -1;
+    else if (ay < -0.35f) *dx =  1;
+    return;
+  }
+  int ex = x - jsCx, ey = y - jsCy;
+  if (JS_SWAP_XY) { int t = ex; ex = ey; ey = t; }
+  if (JS_INV_X) ex = -ex;
+  if (JS_INV_Y) ey = -ey;
+  if      (ex >  JS_THR) *dx =  1;
+  else if (ex < -JS_THR) *dx = -1;
+  if      (ey >  JS_THR) *dy =  1;
+  else if (ey < -JS_THR) *dy = -1;
+}
+
+// ===========================================================================
+// Game 5 — Tetris (俄罗斯方块). Joystick-only: L/R move (DAS auto-repeat),
+// UP = rotate (with wall-kick, one turn per push), down = soft drop, B = back.
+// The A button is NOT used in-game (only restarts after GAME OVER).
+// ===========================================================================
+static const int TET_COLS = 10, TET_ROWS = 20;
+static const int TET_CELL = 11;
+static const int TET_FX = 12, TET_FY = 20;             // field top-left (px)
+static const uint32_t TET_DAS_DELAY = 180, TET_DAS_RATE = 55;   // ms
+static const uint32_t TET_SOFT_MS = 45;                // soft-drop gravity period
+
+// 7 tetrominoes x 4 rotations, packed as 4x4 bitmaps (bit = row*4+col, row 0 top).
+static const uint16_t TET_SHAPE[7][4] = {
+  { 0x00F0, 0x4444, 0x0F00, 0x2222 },   // I
+  { 0x0660, 0x0660, 0x0660, 0x0660 },   // O
+  { 0x0072, 0x0262, 0x0270, 0x0232 },   // T
+  { 0x0036, 0x0462, 0x0360, 0x0231 },   // S
+  { 0x0063, 0x0264, 0x0630, 0x0132 },   // Z
+  { 0x0071, 0x0226, 0x0470, 0x0322 },   // J
+  { 0x0074, 0x0622, 0x0170, 0x0223 },   // L
+};
+static const uint16_t TET_COL[7] = {
+  0x07FF, 0xFFE0, 0xF81F, 0x07E0, 0xF800, 0x001F, 0xFD20,   // I O T S Z J L
+};
+
+static uint8_t  tBoard[TET_ROWS][TET_COLS];   // 0 empty, else colour index+1
+static int      tType, tNext, tRot, tPx, tPy;
+static int      tScore, tLines, tLevel;
+static bool     tOver;
+static uint32_t tDropT;          // next gravity step (ms)
+static int      tDasDir;         // current held horizontal dir (-1/0/1)
+static uint32_t tDasT;           // next auto-repeat time (ms)
+static bool     tPrevUp;         // edge-detect hard-drop
+
+static inline bool tCell(int type, int rot, int r, int c) {
+  return (TET_SHAPE[type][rot] >> (r * 4 + c)) & 1;
+}
+// Does piece (type,rot) at board top-left (px,py) collide with walls/floor/stack?
+static bool tCollide(int type, int rot, int px, int py) {
+  for (int r = 0; r < 4; r++)
+    for (int c = 0; c < 4; c++) {
+      if (!tCell(type, rot, r, c)) continue;
+      int br = py + r, bc = px + c;
+      if (bc < 0 || bc >= TET_COLS || br >= TET_ROWS) return true;
+      if (br >= 0 && tBoard[br][bc]) return true;     // br<0 = still above field
+    }
+  return false;
+}
+static void tSpawn() {
+  tType = tNext; tNext = (int)gRand(7);
+  tRot = 0; tPx = 3; tPy = 0;
+  if (tCollide(tType, tRot, tPx, tPy)) { tOver = true; beep(500, 120); beep(350, 200); }
+}
+static void tLockAndClear() {
+  for (int r = 0; r < 4; r++)
+    for (int c = 0; c < 4; c++)
+      if (tCell(tType, tRot, r, c)) {
+        int br = tPy + r, bc = tPx + c;
+        if (br >= 0 && br < TET_ROWS && bc >= 0 && bc < TET_COLS)
+          tBoard[br][bc] = (uint8_t)(tType + 1);
+      }
+  int cleared = 0;
+  for (int r = TET_ROWS - 1; r >= 0; ) {
+    bool full = true;
+    for (int c = 0; c < TET_COLS; c++) if (!tBoard[r][c]) { full = false; break; }
+    if (full) {
+      cleared++;
+      for (int rr = r; rr > 0; rr--)
+        for (int c = 0; c < TET_COLS; c++) tBoard[rr][c] = tBoard[rr - 1][c];
+      for (int c = 0; c < TET_COLS; c++) tBoard[0][c] = 0;
+    } else r--;
+  }
+  if (cleared) {
+    static const int LS[5] = { 0, 40, 100, 300, 1200 };   // classic line-clear scores
+    tScore += LS[cleared] * (tLevel + 1);
+    tLines += cleared; tLevel = tLines / 10;
+    if (cleared >= 4) { beep(2200, 80); beep(2600, 80); beep(3100, 120); }
+    else { beep(2400, 60); beep(2800, 80); }
+  }
+  tSpawn();
+}
+static uint32_t tGravityMs() {            // gravity period for the current level
+  int ms = 600 - tLevel * 55;
+  return (uint32_t)(ms < 90 ? 90 : ms);
+}
+static void tMoveH(int d) {
+  if (!tCollide(tType, tRot, tPx + d, tPy)) { tPx += d; beep(1500, 12); }
+}
+static void tetRotate() {                 // rotate cw with simple wall-kick
+  int nr = (tRot + 1) & 3;
+  if (!tCollide(tType, nr, tPx, tPy)) { tRot = nr; beep(1900, 25); return; }
+  static const int KICK[4] = { -1, 1, -2, 2 };
+  for (int k = 0; k < 4; k++)
+    if (!tCollide(tType, nr, tPx + KICK[k], tPy)) {
+      tPx += KICK[k]; tRot = nr; beep(1900, 25); return;
+    }
+  beep(400, 30);                          // rotation blocked
+}
+static void tetHardDrop() {               // slam to the bottom and lock
+  int dist = 0;
+  while (!tCollide(tType, tRot, tPx, tPy + 1)) { tPy++; dist++; }
+  tScore += dist * 2; beep(1700, 30);
+  tLockAndClear();
+  tDropT = millis() + tGravityMs();
+}
+
+// ---- External dual-button unit on the top HAT (G1 = rotate, G8 = hard drop)
+// Wire: GND->HAT pin1, A->pin7 (G1), B->pin9 (G8). Buttons are active-low with
+// the MCU's internal pull-up; the unit's 5V need not be connected.
+static const int HAT_BTN_A = 1;    // HAT 'G1' pad -> rotate
+static const int HAT_BTN_B = 8;    // HAT 'G8' pad -> hard drop
+// This unit drives the signal HIGH on press (needs VCC -> wire it to 3V3, not
+// 5V). Set false for a plain button-to-GND unit (idle pull-up, press = LOW).
+static const bool HAT_ACTIVE_HIGH = false;
+static bool tHatInit = false;
+static bool tPrevBtnA = false, tPrevBtnB = false;
+static void tHatBegin() {
+  int mode = HAT_ACTIVE_HIGH ? INPUT_PULLDOWN : INPUT_PULLUP;
+  pinMode(HAT_BTN_A, mode);
+  pinMode(HAT_BTN_B, mode);
+  tHatInit = true;
+}
+static inline bool tHatPressed(int pin) {
+  return HAT_ACTIVE_HIGH ? (digitalRead(pin) == HIGH) : (digitalRead(pin) == LOW);
+}
+
+static void gTetrisInit() {
+  for (int r = 0; r < TET_ROWS; r++)
+    for (int c = 0; c < TET_COLS; c++) tBoard[r][c] = 0;
+  tScore = 0; tLines = 0; tLevel = 0; tOver = false;
+  tDasDir = 0; tDasT = 0; tPrevUp = false;
+  if (!tHatInit) tHatBegin();
+  tPrevBtnA = tPrevBtnB = false;
+  jsCalibrate();                          // capture stick rest position
+  tNext = (int)gRand(7); tSpawn();
+  tDropT = millis() + tGravityMs();
+}
+static void gTetrisA() {                  // in-game A is unused; only restarts after GAME OVER
+  if (tOver) gTetrisInit();
+}
+
+static inline void tDrawCell(int bc, int br, uint16_t col) {
+  int x = TET_FX + bc * TET_CELL, y = TET_FY + br * TET_CELL;
+  spr.fillRect(x, y, TET_CELL - 1, TET_CELL - 1, col);
+}
+static void gTetrisTick() {
+  uint32_t now = millis();
+  if (!tOver) {
+    int dx, dy; jsDir(&dx, &dy);
+
+    // Horizontal move with DAS (initial tap, then auto-repeat while held).
+    if (dx != 0) {
+      if (dx != tDasDir) { tMoveH(dx); tDasDir = dx; tDasT = now + TET_DAS_DELAY; }
+      else if ((int32_t)(now - tDasT) >= 0) { tMoveH(dx); tDasT = now + TET_DAS_RATE; }
+    } else tDasDir = 0;
+
+    // External HAT buttons: A = rotate, B = hard drop (edge-triggered).
+    bool bA = tHatPressed(HAT_BTN_A);
+    bool bB = tHatPressed(HAT_BTN_B);
+    if (bA && !tPrevBtnA) tetRotate();
+    if (bB && !tPrevBtnB) tetHardDrop();
+    tPrevBtnA = bA; tPrevBtnB = bB;
+
+    // Joystick UP also rotates (fallback when the buttons aren't wired yet).
+    bool up = (dy < 0);
+    if (up && !tPrevUp) tetRotate();
+    tPrevUp = up;
+
+    // Gravity — faster while pushing down (soft drop).
+    uint32_t period = (dy > 0) ? TET_SOFT_MS : tGravityMs();
+    if ((int32_t)(now - tDropT) >= 0) {
+      if (!tCollide(tType, tRot, tPx, tPy + 1)) { tPy++; if (dy > 0) tScore += 1; }
+      else tLockAndClear();
+      tDropT = now + period;
+    }
+  }
+
+  // ---- render (portrait) ----
+  spr.fillSprite(COL_BG);
+  // HUD: score (left) + next-piece mini preview (right)
+  spr.setTextSize(1);
+  if (TET_DEBUG) {
+    int rx = jsCx, ry = jsCy; jsReadRaw(&rx, &ry);
+    int bA = digitalRead(HAT_BTN_A);    // raw level: 1=HIGH, 0=LOW
+    int bB = digitalRead(HAT_BTN_B);
+    spr.setTextColor(0x07FF, COL_BG);
+    spr.setCursor(2, 2);  spr.printf("k%d x%d y%d", jsKind, rx, ry);
+    spr.setCursor(2, 11); spr.printf("G1:%d G8:%d  S%d", bA, bB, tScore);
+  } else {
+    spr.setTextColor(COL_HUD, COL_BG);
+    spr.setCursor(2, 2);  spr.printf("%d", tScore);
+    spr.setTextColor(0x8410, COL_BG);
+    spr.setCursor(2, 11); spr.printf("L%d", tLevel);
+    for (int r = 0; r < 4; r++)
+      for (int c = 0; c < 4; c++)
+        if (tCell(tNext, 0, r, c))
+          spr.fillRect(108 + c * 4, 2 + r * 4, 3, 3, TET_COL[tNext]);
+  }
+
+  // field border + locked stack
+  spr.drawRect(TET_FX - 1, TET_FY - 1, TET_COLS * TET_CELL + 1, TET_ROWS * TET_CELL + 1, COL_WALL);
+  for (int r = 0; r < TET_ROWS; r++)
+    for (int c = 0; c < TET_COLS; c++)
+      if (tBoard[r][c]) tDrawCell(c, r, TET_COL[tBoard[r][c] - 1]);
+
+  if (!tOver) {
+    // ghost (landing preview) — dim outline
+    int gy = tPy;
+    while (!tCollide(tType, tRot, tPx, gy + 1)) gy++;
+    for (int r = 0; r < 4; r++)
+      for (int c = 0; c < 4; c++)
+        if (tCell(tType, tRot, r, c) && gy + r >= 0) {
+          int x = TET_FX + (tPx + c) * TET_CELL, y = TET_FY + (gy + r) * TET_CELL;
+          spr.drawRect(x, y, TET_CELL - 1, TET_CELL - 1, 0x4208);
+        }
+    // active piece
+    for (int r = 0; r < 4; r++)
+      for (int c = 0; c < 4; c++)
+        if (tCell(tType, tRot, r, c) && tPy + r >= 0)
+          tDrawCell(tPx + c, tPy + r, TET_COL[tType]);
+  } else {
+    spr.setTextSize(2); spr.setTextColor(0xF800, COL_BG);
+    spr.setCursor(W / 2 - 50, H / 2 - 24); spr.print("GAME OVER");
+    spr.setTextSize(1); spr.setTextColor(COL_HUD, COL_BG);
+    spr.setCursor(W / 2 - 30, H / 2 + 2); spr.printf("score %d", tScore);
+    spr.setTextColor(0x8410, COL_BG);
+    spr.setCursor(W / 2 - 42, H / 2 + 20); spr.print("A:retry  B:back");
+  }
+}
+
+// ===========================================================================
 // Picker + dispatcher
 // ===========================================================================
 // Picker rows = the games plus a trailing EXIT entry.
@@ -776,8 +1073,8 @@ static void gDrawPicker() {
   for (int i = 0; i < PICK_N; i++) {
     bool sel = (i == gSel);
     bool exit = (i == GAME_N);
-    int y = 68 + i * 32;
-    if (sel) { spr.fillRoundRect(10, y - 4, W - 20, 26, 4, exit ? 0x4000 : 0x2945);
+    int y = 48 + i * 29;
+    if (sel) { spr.fillRoundRect(10, y - 4, W - 20, 25, 4, exit ? 0x4000 : 0x2945);
                spr.setTextColor(0xFFE0, exit ? 0x4000 : 0x2945); }
     else spr.setTextColor(exit ? 0xC986 : 0x8410, COL_BG);
     spr.setCursor(24, y); spr.print(sel ? "> " : "  ");
@@ -800,11 +1097,12 @@ void gameTick() {
     case 1: gSlotTick(); break;
     case 2: gRaceTick(); break;
     case 3: gReactTick(); break;
+    case 4: gTetrisTick(); break;
   }
 }
 void gameButtonA() {              // short A (release edge)
   if (gScreen == GS_PICKER) { gSel = (gSel + 1) % PICK_N; beep(1800, 30); return; }
-  switch (gGame) { case 0: gMazeA(); break; case 1: gSlotA(); break; case 2: gRaceA(); break; case 3: gReactA(); break; }
+  switch (gGame) { case 0: gMazeA(); break; case 1: gSlotA(); break; case 2: gRaceA(); break; case 3: gReactA(); break; case 4: gTetrisA(); break; }
 }
 void gameButtonADown() {          // A down-edge — low-latency capture for timing games
   if (gScreen == GS_PLAY && gGame == 3) gReactDown();
@@ -813,7 +1111,7 @@ void gameButtonB() {             // B
   if (gScreen == GS_PICKER) {
     if (gSel == GAME_N) { gameExit(); return; }   // EXIT row
     gGame = gSel; gScreen = GS_PLAY; beep(2400, 40);
-    switch (gGame) { case 0: gMazeInit(); break; case 1: gSlotInit(); break; case 2: gRaceInit(); break; case 3: gReactInit(); break; }
+    switch (gGame) { case 0: gMazeInit(); break; case 1: gSlotInit(); break; case 2: gRaceInit(); break; case 3: gReactInit(); break; case 4: gTetrisInit(); break; }
   } else {
     gScreen = GS_PICKER; beep(1200, 40);    // back to the picker
     if (tlPresent) tlAllOff();              // clear any lamps a game lit
