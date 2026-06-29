@@ -217,7 +217,16 @@ def main():
     elif event == "PreToolUse":
         if data.get("tool_name") == "AskUserQuestion":
             handle_ask(data, tty, term)
-        sys.exit(0)                         # no-op for all other tools
+        else:
+            # Heartbeat: any tool starting means this session is actively working.
+            # Re-arms "running" on an async/background RESUME (which carries no
+            # UserPromptSubmit) and keeps the light green through long tool runs.
+            post({"evt": "tick", "sid": sid, "tty": tty, "term": term})
+        sys.exit(0)
+    elif event in ("PostToolUse", "SubagentStop"):
+        # Heartbeat on tool completion / subagent return — same rationale as above.
+        post({"evt": "tick", "sid": sid, "tty": tty, "term": term})
+        sys.exit(0)
     elif event == "PermissionRequest":
         tool = data.get("tool_name", "")
         if tool == "AskUserQuestion":

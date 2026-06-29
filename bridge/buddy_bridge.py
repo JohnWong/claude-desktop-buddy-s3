@@ -275,6 +275,17 @@ def apply_event(ev: dict):
         s["awaiting"] = False            # you replied → clear the awaiting border
         s["asking"] = False              # you replied → clear any pending question
         s["question"] = False            # and any pending AskUserQuestion heads-up
+    elif evt == "tick":
+        # Tool activity (PreToolUse/PostToolUse/SubagentStop). Treated like a turn
+        # restart: the session is actively working RIGHT NOW. This is what makes
+        # the light go green again after an async/background resume — those resumes
+        # carry no UserPromptSubmit, so without this the session would be stuck
+        # showing idle through all the resumed work. Also keeps long subagent /
+        # background runs green instead of letting `seen` go stale.
+        s["state"] = "running"
+        s["awaiting"] = False
+        s["asking"] = False
+        s["question"] = False
     elif evt == "idle":
         s["state"] = "idle"              # turn ended (border waits for idle_prompt)
         s["asking"] = bool(ev.get("asking"))  # heuristic: turn ended on a question
@@ -577,8 +588,33 @@ async def ble_loop():
             notfound = 0
             print(f"[ble] found {dev.name} [{dev.address}], connecting...", flush=True)
             t0 = time.monotonic()
-            async with BleakClient(dev) as client:
-                _CURRENT_BLE_CLIENT = client
+            client = BleakClient(dev)
+            # Connect with a timeout. Without this, CoreBluetooth can hang
+            # forever on a half-open link (the device thinks it's still connected
+            # and stops advertising, so no scan will find it either). On timeout
+            # we explicitly disconnect to clear that half-open state, then let
+            # launchd restart us — a fresh process + cleared link is the only
+            # reliable recovery.
+            try:
+                await asyncio.wait_for(client.connect(), timeout=15.0)
+            except asyncio.TimeoutError:
+                print("[ble] connect wedged (15s); clearing half-open link", flush=True)
+                try:
+                    await client.disconnect()
+                except Exception:
+                    pass
+                _restart("connect wedged")
+                continue
+            except Exception as e:
+                print(f"[ble] connect failed: {e!r}", flush=True)
+                try:
+                    await client.disconnect()
+                except Exception:
+                    pass
+                await asyncio.sleep(3.0)
+                continue
+            _CURRENT_BLE_CLIENT = client
+            try:
                 print(f"[ble] connected={client.is_connected}", flush=True)
                 try:
                     await client.start_notify(NUS_TX, on_tx)
@@ -604,7 +640,12 @@ async def ble_loop():
                         print(f"[ble] write failed ({e})", flush=True)
                         break
                     await asyncio.sleep(PUSH_PERIOD)
+            finally:
                 _CURRENT_BLE_CLIENT = None
+                try:
+                    await client.disconnect()
+                except Exception:
+                    pass
             # Link ended. Reconnect IN-PROCESS — restarting doesn't fix a flaky link
             # and just thrashes launchd (we saw 70 restarts). Back off if it dropped
             # almost immediately so we don't tight-loop connect/drop.
