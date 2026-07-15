@@ -1279,6 +1279,7 @@ void loop() {
   t++;
   uint32_t now = millis();
 
+  bleTick();        // software link-supervision: recover a half-open BLE link
   dataPoll(&tama);
   if (!gameActive) tlUpdate(tama);   // mirror sessions onto the lights (games own them while active)
   if (statsPollLevelUp()) triggerOneShot(P_CELEBRATE, 3000);

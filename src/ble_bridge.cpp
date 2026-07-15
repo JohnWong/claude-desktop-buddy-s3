@@ -29,8 +29,18 @@ static volatile bool      connected = false;
 static volatile bool      secure = false;
 static volatile uint32_t  passkey = 0;
 static volatile uint16_t  mtu = 23;
+static volatile uint32_t  lastRxMs = 0;   // millis() of the last byte received
+
+// Software link-supervision timeout. While connected, the bridge writes a
+// status frame every ~2.5s, so RX silence this long means the central vanished
+// without a clean disconnect (its process was killed / the host toggled its BLE
+// radio). The ESP32 onDisconnect callback does NOT fire reliably in that case,
+// leaving us stuck "connected" and therefore NOT advertising — invisible to
+// every scanner, recoverable only by a physical reset. bleTick() breaks that.
+static const uint32_t     BLE_LINK_TIMEOUT_MS = 12000;
 
 static void rxPush(const uint8_t* p, size_t n) {
+  lastRxMs = millis();   // link liveness: any inbound byte re-arms the watchdog
   for (size_t i = 0; i < n; i++) {
     size_t next = (rxHead + 1) % RX_CAP;
     if (next == rxTail) return;  // full — drop (upstream should keep up)
@@ -49,6 +59,7 @@ class RxCallbacks : public BLECharacteristicCallbacks {
 class ServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer* s) override {
     connected = true;
+    lastRxMs = millis();   // grace period before the watchdog can fire
     Serial.println("[ble] connected");
   }
   void onDisconnect(BLEServer* s) override {
@@ -126,6 +137,20 @@ void bleInit(const char* deviceName) {
 
 bool bleConnected() { return connected; }
 bool bleSecure()    { return secure; }
+
+void bleTick() {
+  // Software link supervision — see BLE_LINK_TIMEOUT_MS. Call this every loop.
+  if (!connected) return;
+  if (millis() - lastRxMs < BLE_LINK_TIMEOUT_MS) return;
+  // RX has gone silent past the deadline: the central is gone but the stack
+  // never told us. Initiate the disconnect ourselves — an app-initiated
+  // disconnect DOES generate the GAP event, so onDisconnect() then fires and
+  // restarts advertising, making us discoverable again. Bump lastRxMs so we
+  // retry on a 12s cadence rather than every loop if the event is delayed.
+  Serial.println("[ble] rx silent past supervision timeout; forcing disconnect");
+  if (server) server->disconnect(server->getConnId());
+  lastRxMs = millis();
+}
 uint32_t blePasskey() { return passkey; }
 
 void bleClearBonds() {

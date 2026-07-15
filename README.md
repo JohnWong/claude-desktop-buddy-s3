@@ -150,7 +150,7 @@ src/
   data.h          — wire protocol, JSON parse
 bridge/           — CLI daemon + hooks + launchd agent (the no-desktop-app link)
 docs/             — BUILD_NOTES, TRAFFIC_LIGHT (wiring + LEGO build)
-bricks/           — Studio model (design.io), build plan (design.png), HS-F05-L part
+bricks/           — Studio model (design.io), parts list (design.csv), HS-F05-L part
 characters/       — example GIF packs
 tools/            — generators and converters
 ```

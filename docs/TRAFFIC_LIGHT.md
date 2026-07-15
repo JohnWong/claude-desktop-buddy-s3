@@ -5,8 +5,8 @@ REACT 反应竞速游戏复用为发车灯。本文件汇总**经硬件自检验
 接线/寄存器、固件映射、安全事项，供复现与排障。
 
 相关代码：`src/trafficlight.h`、`src/game.h`（REACT）、`src/main.cpp`。
-相关文件：`bricks/design.io`（Studio 模型）、`bricks/design.png`（搭建图）、
-`bricks/HS-F05-L.part`（交通灯模块的自定义件）。
+相关文件：`bricks/design.io`（Studio 模型）、`bricks/design.csv`（零件清单）、
+`bricks/HS-F05-L.part`（交通灯模块的自定义件）、`docs/design.png`（搭建图）。
 
 ---
 
@@ -49,7 +49,7 @@ PbHub v1.1 (I2C 从机, 地址 0x61)
 | Grove（HY2.0-4P）- 杜邦(公)线 | 3 | PbHub 通道 ↔ 交通灯排针，随便买 |
 | 乐高 Technic 件 | 若干 | 旗杆/底座（清单见 §3 与 `bricks/`） |
 
-> 详细规格见 [§2 物料（BOM）](#2-物料bom)；搭建用乐高件见 §3。
+> 交通灯模块详细规格见 §3 提示；搭建用乐高件清单见 §3 与 `bricks/design.csv`。
 
 ## 3. 乐高搭建方案
 
@@ -92,8 +92,8 @@ PbHub v1.1 (I2C 从机, 地址 0x61)
 | 黄 | SDA |
 | 白 | SCL |
 
-- 固件用 M5Unified 的外部 I2C `M5.Ex_I2C`（自动取 Grove 口 GPIO，**勿硬编 32/33**）。
-- PbHub 地址 **0x61**（可经 A0~A2 焊点改 0x61~0x68）。
+- 固件用 M5Unified 的外部 I2C `M5.Ex_I2C`（自动取 Grove 口 GPIO，StickS3 上是 G9/G10，**勿硬编引脚号**）。
+- PbHub 地址 **0x61**。
 
 ---
 

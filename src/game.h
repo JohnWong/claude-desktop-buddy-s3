@@ -34,8 +34,8 @@ enum { GS_PICKER = 0, GS_PLAY = 1 };
 static int gScreen = GS_PICKER;
 static int gSel    = 0;     // picker cursor
 static int gGame   = 0;     // active game index
-static const char* GAME_NAMES[] = { "MAZE", "SLOTS", "RACER", "REACT", "TETRIS" };
-static const int   GAME_N = 5;
+static const char* GAME_NAMES[] = { "MAZE", "SLOTS", "RACER", "REACT", "TETRIS", "PLANE" };
+static const int   GAME_N = 6;
 
 // Forward decls for per-game lifecycles.
 static void gMazeInit();  static void gMazeTick();  static void gMazeA();
@@ -43,6 +43,7 @@ static void gSlotInit();  static void gSlotTick();  static void gSlotA();
 static void gRaceInit();  static void gRaceTick();  static void gRaceA();
 static void gReactInit(); static void gReactTick(); static void gReactA();
 static void gTetrisInit(); static void gTetrisTick(); static void gTetrisA();
+static void gPlaneInit(); static void gPlaneTick(); static void gPlaneA();
 
 // ===========================================================================
 // Game 1 — Tilt-ball maze
@@ -829,6 +830,30 @@ static void jsDir(int* dx, int* dy) {
   if      (ey >  JS_THR) *dy =  1;
   else if (ey < -JS_THR) *dy = -1;
 }
+// Analog read: normalized [-1,1] per axis (small dead-zone, same swap/invert as
+// jsDir). For games that want proportional movement (e.g. the shmup).
+static void jsAnalog(float* ax, float* ay) {
+  *ax = 0; *ay = 0;
+  int x, y;
+  if (!jsReadRaw(&x, &y)) {                 // no joystick -> IMU tilt
+    float gx, gy, gz; compat::getAccel(&gx, &gy, &gz); (void)gz;
+    float tx = -gy, ty = -gx;
+    *ax = tx > 1 ? 1 : (tx < -1 ? -1 : tx);
+    *ay = ty > 1 ? 1 : (ty < -1 ? -1 : ty);
+    return;
+  }
+  int ex = x - jsCx, ey = y - jsCy;
+  if (JS_SWAP_XY) { int t = ex; ex = ey; ey = t; }
+  if (JS_INV_X) ex = -ex;
+  if (JS_INV_Y) ey = -ey;
+  const int DZ = 16, SPAN = 88;
+  float fx = (ex > DZ) ? (float)(ex - DZ) / (SPAN - DZ)
+           : (ex < -DZ) ? (float)(ex + DZ) / (SPAN - DZ) : 0.0f;
+  float fy = (ey > DZ) ? (float)(ey - DZ) / (SPAN - DZ)
+           : (ey < -DZ) ? (float)(ey + DZ) / (SPAN - DZ) : 0.0f;
+  *ax = fx > 1 ? 1 : (fx < -1 ? -1 : fx);
+  *ay = fy > 1 ? 1 : (fy < -1 ? -1 : fy);
+}
 
 // ===========================================================================
 // Game 5 — Tetris (俄罗斯方块). Joystick-only: L/R move (DAS auto-repeat),
@@ -1061,6 +1086,151 @@ static void gTetrisTick() {
 }
 
 // ===========================================================================
+// Game 6 — 打飞机 (vertical shmup). Analog joystick = free move, HAT A = fire
+// (hold to auto-fire), HAT B = bomb (screen-clear, limited). The on-device A
+// button retries after GAME OVER; the on-device B button returns to the picker.
+// ===========================================================================
+static const int      PL_HW = 8, PL_HH = 9;        // player half-size (px)
+static const float    PL_SPD = 6.0f;               // max move speed (px/frame)
+static const uint32_t PL_FIRE_MS = 140;            // auto-fire interval
+static const int      PL_MAXP = 12, PL_MAXF = 10, PL_MAXE = 16, PL_STARS = 18;
+
+struct PShot { float x, y, vx, vy; bool act; };
+struct PFoe  { float x, y, vx, vy; int hp; uint8_t kind; uint32_t fireT; bool act; };
+
+static PShot plShot[PL_MAXP], plEShot[PL_MAXE];
+static PFoe  plFoe[PL_MAXF];
+static float plStarX[PL_STARS], plStarY[PL_STARS]; static uint8_t plStarSp[PL_STARS];
+static float plX, plY;
+static int   plLives, plBombs, plScore, plHigh = -1;
+static bool  plOver, plPrevBomb;
+static uint32_t plFireT, plSpawnT, plInvuln;
+
+static int  gPlaneLoadHigh() { Preferences p; p.begin("buddy", true);  int h = p.getInt("planehi", 0); p.end(); return h; }
+static void gPlaneSaveHigh(int h) { Preferences p; p.begin("buddy", false); p.putInt("planehi", h); p.end(); }
+
+static void gPlaneInit() {
+  for (int i = 0; i < PL_MAXP; i++) plShot[i].act = false;
+  for (int i = 0; i < PL_MAXE; i++) plEShot[i].act = false;
+  for (int i = 0; i < PL_MAXF; i++) plFoe[i].act = false;
+  for (int i = 0; i < PL_STARS; i++) { plStarX[i] = gRand(W); plStarY[i] = gRand(H); plStarSp[i] = 1 + gRand(3); }
+  plX = W / 2; plY = H - 46; plLives = 3; plBombs = 3; plScore = 0;
+  plOver = false; plPrevBomb = false; plFireT = 0; plSpawnT = millis(); plInvuln = 0;
+  if (plHigh < 0) plHigh = gPlaneLoadHigh();
+  if (!tHatInit) tHatBegin();
+  jsCalibrate();
+}
+static void gPlaneA() { if (plOver) gPlaneInit(); }   // on-device A: retry only
+
+static void plFire() {
+  for (int i = 0; i < PL_MAXP; i++) if (!plShot[i].act) {
+    plShot[i] = { plX, plY - PL_HH, 0, -6.0f, true }; beep(2600, 8); return;
+  }
+}
+static void plSpawnFoe() {
+  for (int i = 0; i < PL_MAXF; i++) if (!plFoe[i].act) {
+    PFoe& f = plFoe[i]; f.act = true; f.kind = (uint8_t)gRand(3);
+    f.x = 10 + gRand(W - 20); f.y = -10; f.fireT = millis() + 800 + gRand(800);
+    float sp = 1.3f + plScore * 0.004f; if (sp > 3.2f) sp = 3.2f;
+    if      (f.kind == 0) { f.vx = 0;                         f.vy = sp + 0.3f; f.hp = 1; }
+    else if (f.kind == 1) { f.vx = (gRand(2) ? 1.4f : -1.4f); f.vy = sp;        f.hp = 1; }
+    else                  { f.vx = 0;                         f.vy = sp * 0.7f; f.hp = 2; }
+    return;
+  }
+}
+static void plBomb() {
+  if (plBombs <= 0) { beep(400, 80); return; }
+  plBombs--; beep(1200, 60); beep(1800, 80);
+  for (int i = 0; i < PL_MAXF; i++) if (plFoe[i].act) { plFoe[i].act = false; plScore += 5; }
+  for (int i = 0; i < PL_MAXE; i++) plEShot[i].act = false;
+}
+static void plHurt() {
+  if (millis() < plInvuln) return;
+  plLives--; plInvuln = millis() + 1300; beep(500, 120); beep(350, 150);
+  if (plLives <= 0) { plOver = true; if (plScore > plHigh) { plHigh = plScore; gPlaneSaveHigh(plHigh); } }
+}
+
+static void gPlaneTick() {
+  uint32_t now = millis();
+  if (!plOver) {
+    float ax, ay; jsAnalog(&ax, &ay);                 // analog free movement
+    plX += ax * PL_SPD; plY += ay * PL_SPD;
+    if (plX < PL_HW) plX = PL_HW; if (plX > W - PL_HW) plX = W - PL_HW;
+    if (plY < PL_HH) plY = PL_HH; if (plY > H - PL_HH) plY = H - PL_HH;
+
+    if (tHatPressed(HAT_BTN_A) && now - plFireT >= PL_FIRE_MS) { plFire(); plFireT = now; }
+    bool b = tHatPressed(HAT_BTN_B);
+    if (b && !plPrevBomb) plBomb();
+    plPrevBomb = b;
+
+    uint32_t si = (plScore * 8 < 740) ? 1100 - plScore * 8 : 360;
+    if (now - plSpawnT > si) { plSpawnFoe(); plSpawnT = now; }
+
+    for (int i = 0; i < PL_MAXP; i++) if (plShot[i].act) {
+      plShot[i].y += plShot[i].vy; if (plShot[i].y < -4) plShot[i].act = false;
+    }
+    for (int i = 0; i < PL_MAXF; i++) { PFoe& f = plFoe[i]; if (!f.act) continue;
+      f.x += f.vx; f.y += f.vy;
+      if (f.kind == 1 && (f.x < PL_HW || f.x > W - PL_HW)) f.vx = -f.vx;
+      if (f.y > H + 10) { f.act = false; continue; }
+      if (f.kind == 2 && now > f.fireT && f.y < H * 0.55f) {       // aimed shot
+        f.fireT = now + 1100 + gRand(700);
+        for (int k = 0; k < PL_MAXE; k++) if (!plEShot[k].act) {
+          float dx = plX - f.x, dy = plY - f.y, d = sqrtf(dx * dx + dy * dy); if (d < 1) d = 1;
+          plEShot[k] = { f.x, f.y, dx / d * 3.0f, dy / d * 3.0f, true }; beep(1500, 10); break;
+        }
+      }
+      if (fabsf(f.x - plX) < PL_HW + 6 && fabsf(f.y - plY) < PL_HH + 6) { f.act = false; plHurt(); }
+    }
+    for (int i = 0; i < PL_MAXP; i++) { if (!plShot[i].act) continue;
+      for (int j = 0; j < PL_MAXF; j++) { PFoe& f = plFoe[j]; if (!f.act) continue;
+        if (fabsf(plShot[i].x - f.x) < 8 && fabsf(plShot[i].y - f.y) < 9) {
+          plShot[i].act = false; f.hp--;
+          if (f.hp <= 0) { f.act = false; plScore += f.kind == 2 ? 25 : (f.kind == 1 ? 15 : 10); beep(2200, 15); }
+          break;
+        }
+      }
+    }
+    for (int i = 0; i < PL_MAXE; i++) { if (!plEShot[i].act) continue;
+      plEShot[i].x += plEShot[i].vx; plEShot[i].y += plEShot[i].vy;
+      if (plEShot[i].y > H + 4 || plEShot[i].x < -4 || plEShot[i].x > W + 4) { plEShot[i].act = false; continue; }
+      if (fabsf(plEShot[i].x - plX) < PL_HW + 1 && fabsf(plEShot[i].y - plY) < PL_HH + 1) { plEShot[i].act = false; plHurt(); }
+    }
+    for (int i = 0; i < PL_STARS; i++) { plStarY[i] += plStarSp[i]; if (plStarY[i] > H) { plStarY[i] = 0; plStarX[i] = gRand(W); } }
+  }
+
+  // ---- render ----
+  spr.fillSprite(COL_BG);
+  for (int i = 0; i < PL_STARS; i++) spr.drawPixel((int)plStarX[i], (int)plStarY[i], plStarSp[i] > 2 ? 0xCE59 : 0x630C);
+  for (int i = 0; i < PL_MAXE; i++) if (plEShot[i].act) spr.fillCircle((int)plEShot[i].x, (int)plEShot[i].y, 2, 0xFD20);
+  for (int i = 0; i < PL_MAXP; i++) if (plShot[i].act) spr.fillRect((int)plShot[i].x - 1, (int)plShot[i].y - 4, 2, 5, 0xFFFF);
+  for (int i = 0; i < PL_MAXF; i++) { PFoe& f = plFoe[i]; if (!f.act) continue;
+    uint16_t c = f.kind == 2 ? 0x07FF : (f.kind == 1 ? 0xF81F : 0xF800);
+    spr.fillTriangle((int)f.x, (int)f.y + 6, (int)f.x - 7, (int)f.y - 5, (int)f.x + 7, (int)f.y - 5, c);
+    spr.fillRect((int)f.x - 2, (int)f.y - 2, 4, 4, 0x0000);
+  }
+  if (!plOver && !(millis() < plInvuln && (millis() / 90) % 2 == 0)) {   // blink while invuln
+    spr.fillTriangle((int)plX, (int)plY - PL_HH, (int)plX - PL_HW, (int)plY + PL_HH, (int)plX + PL_HW, (int)plY + PL_HH, 0x07E0);
+    spr.fillRect((int)plX - 2, (int)plY - 1, 4, 5, 0xFFFF);
+  }
+  spr.setTextSize(1); spr.setTextColor(COL_HUD, COL_BG);
+  spr.setCursor(2, 2); spr.printf("%d", plScore);
+  spr.setTextColor(0xF800, COL_BG); spr.setCursor(2, 11);  spr.printf("HP%d", plLives);
+  spr.setTextColor(0xFD20, COL_BG); spr.setCursor(40, 11); spr.printf("B%d", plBombs);
+  spr.setTextColor(0xFFE0, COL_BG); spr.setCursor(W - 46, 2); spr.printf("hi%d", plHigh < 0 ? 0 : plHigh);
+  if (plOver) {
+    spr.setTextSize(2); spr.setTextColor(0xF800, COL_BG);
+    spr.setCursor(W / 2 - 50, H / 2 - 24); spr.print("GAME OVER");
+    spr.setTextSize(1); spr.setTextColor(COL_HUD, COL_BG);
+    spr.setCursor(W / 2 - 30, H / 2 + 2); spr.printf("score %d", plScore);
+    bool nb = (plScore >= plHigh && plScore > 0);
+    spr.setTextColor(0xFFE0, COL_BG); spr.setCursor(W / 2 - 30, H / 2 + 16);
+    spr.printf(nb ? "NEW BEST!" : "best %d", plHigh < 0 ? 0 : plHigh);
+    spr.setTextColor(0x8410, COL_BG); spr.setCursor(W / 2 - 42, H / 2 + 32); spr.print("A:retry  B:back");
+  }
+}
+
+// ===========================================================================
 // Picker + dispatcher
 // ===========================================================================
 // Picker rows = the games plus a trailing EXIT entry.
@@ -1073,8 +1243,8 @@ static void gDrawPicker() {
   for (int i = 0; i < PICK_N; i++) {
     bool sel = (i == gSel);
     bool exit = (i == GAME_N);
-    int y = 48 + i * 29;
-    if (sel) { spr.fillRoundRect(10, y - 4, W - 20, 25, 4, exit ? 0x4000 : 0x2945);
+    int y = 40 + i * 26;
+    if (sel) { spr.fillRoundRect(10, y - 4, W - 20, 24, 4, exit ? 0x4000 : 0x2945);
                spr.setTextColor(0xFFE0, exit ? 0x4000 : 0x2945); }
     else spr.setTextColor(exit ? 0xC986 : 0x8410, COL_BG);
     spr.setCursor(24, y); spr.print(sel ? "> " : "  ");
@@ -1098,11 +1268,12 @@ void gameTick() {
     case 2: gRaceTick(); break;
     case 3: gReactTick(); break;
     case 4: gTetrisTick(); break;
+    case 5: gPlaneTick(); break;
   }
 }
 void gameButtonA() {              // short A (release edge)
   if (gScreen == GS_PICKER) { gSel = (gSel + 1) % PICK_N; beep(1800, 30); return; }
-  switch (gGame) { case 0: gMazeA(); break; case 1: gSlotA(); break; case 2: gRaceA(); break; case 3: gReactA(); break; case 4: gTetrisA(); break; }
+  switch (gGame) { case 0: gMazeA(); break; case 1: gSlotA(); break; case 2: gRaceA(); break; case 3: gReactA(); break; case 4: gTetrisA(); break; case 5: gPlaneA(); break; }
 }
 void gameButtonADown() {          // A down-edge — low-latency capture for timing games
   if (gScreen == GS_PLAY && gGame == 3) gReactDown();
@@ -1111,7 +1282,7 @@ void gameButtonB() {             // B
   if (gScreen == GS_PICKER) {
     if (gSel == GAME_N) { gameExit(); return; }   // EXIT row
     gGame = gSel; gScreen = GS_PLAY; beep(2400, 40);
-    switch (gGame) { case 0: gMazeInit(); break; case 1: gSlotInit(); break; case 2: gRaceInit(); break; case 3: gReactInit(); break; case 4: gTetrisInit(); break; }
+    switch (gGame) { case 0: gMazeInit(); break; case 1: gSlotInit(); break; case 2: gRaceInit(); break; case 3: gReactInit(); break; case 4: gTetrisInit(); break; case 5: gPlaneInit(); break; }
   } else {
     gScreen = GS_PICKER; beep(1200, 40);    // back to the picker
     if (tlPresent) tlAllOff();              // clear any lamps a game lit

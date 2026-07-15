@@ -15,6 +15,11 @@
 // snapshots) are written via bleWrite() and chunked to the negotiated MTU.
 
 void bleInit(const char* deviceName);
+// Pump once per loop(): software link-supervision watchdog. If the link goes
+// silent (central vanished without a clean disconnect), forces a disconnect so
+// advertising restarts and the Stick becomes discoverable again — without this
+// a half-open link strands the device "connected" and invisible until reset.
+void bleTick();
 bool bleConnected();
 // True once LE Secure Connections bonding has completed for the current
 // link. The NUS characteristics are encrypted-only, so in practice this
