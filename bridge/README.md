@@ -1,9 +1,11 @@
-# Claude Code → StickS3 bridge (Phase 2)
+# Claude Code / Qoder CLI / Codex CLI → StickS3 bridge (Phase 2)
 
-Drive the buddy directly from the `claude` CLI — **no desktop app**.
+Drive the buddy directly from the `claude`, `qoder`, or `codex` CLI — **no desktop app**.
 
 ```
-claude CLI ──hooks──► buddy_hook.py ──unix socket──► buddy_bridge.py ──BLE──► StickS3
+claude CLI ──hooks──► buddy_hook.py  ──┐
+qoder CLI  ──hooks──► qoder_hook.py  ──┼── unix socket ──► buddy_bridge.py ──BLE──► StickS3
+codex CLI  ──hooks──► codex_hook.py  ──┘
 ```
 
 ## Components
@@ -11,8 +13,15 @@ claude CLI ──hooks──► buddy_hook.py ──unix socket──► buddy_b
   link, aggregates all sessions into the firmware's `{total,running,waiting,msg}`
   schema, pushes every 2.5s, auto-reconnects. Needs `bleak` → run with the venv:
   `~/.pio-venv/bin/python bridge/buddy_bridge.py`
-- `hooks/buddy_hook.py` — tiny stdlib-only hook client. Fail-open (bridge down →
+- `hooks/buddy_hook.py` — Claude Code hook client. Fail-open (bridge down →
   no-op, Claude Code unaffected). Runs under system `python3`.
+- `hooks/qoder_hook.py` — Qoder CLI hook client. Same IPC protocol, adapted for
+  Qoder's `hookSpecificOutput` format. Fail-open, stdlib-only.
+- `hooks/codex_hook.py` — Codex CLI hook client. Uses Codex lifecycle hooks,
+  relays permission prompts, and reads Codex `token_count` transcript events for
+  output-token counters plus 5h/7d rate-limit percentages when present.
+- `qoder_statusline.py` — Qoder CLI statusLine adapter. Prints a compact
+  model/project status line.
 
 ## State mapping (M2)
 | Hook | → session state |
@@ -93,3 +102,71 @@ Only counts, the coarse event, the notification type, the **cwd basename**, and
 (for tab ordering) the session's **tty + `TERM_PROGRAM`** ever leave the hook —
 and the tty/term go only to the local bridge, never to the device. No prompt
 text, tool input, file contents, diffs, or transcript is sent.
+
+## Qoder CLI Setup
+The bridge daemon is shared — one process serves both Claude Code and Qoder CLI
+sessions simultaneously via the same Unix socket.
+
+1. **Bridge daemon**: same as above (launchd agent or manual run). No changes needed.
+
+2. **Hooks**: add to `~/.qoder/settings.json`:
+   ```json
+   {
+     "hooks": {
+       "SessionStart":      [{"matcher": "*", "hooks": [{"type": "command", "command": "python3 /Users/john/alibaba/s3stick/bridge/hooks/qoder_hook.py"}]}],
+       "UserPromptSubmit":  [{"matcher": "*", "hooks": [{"type": "command", "command": "python3 /Users/john/alibaba/s3stick/bridge/hooks/qoder_hook.py"}]}],
+       "Stop":              [{"matcher": "*", "hooks": [{"type": "command", "command": "python3 /Users/john/alibaba/s3stick/bridge/hooks/qoder_hook.py"}]}],
+       "Notification":      [{"matcher": "*", "hooks": [{"type": "command", "command": "python3 /Users/john/alibaba/s3stick/bridge/hooks/qoder_hook.py"}]}],
+       "SessionEnd":        [{"matcher": "*", "hooks": [{"type": "command", "command": "python3 /Users/john/alibaba/s3stick/bridge/hooks/qoder_hook.py"}]}],
+       "PreToolUse":        [{"matcher": "*", "hooks": [{"type": "command", "command": "python3 /Users/john/alibaba/s3stick/bridge/hooks/qoder_hook.py"}]}],
+       "PostToolUse":       [{"matcher": "*", "hooks": [{"type": "command", "command": "python3 /Users/john/alibaba/s3stick/bridge/hooks/qoder_hook.py"}]}],
+       "SubagentStop":      [{"matcher": "*", "hooks": [{"type": "command", "command": "python3 /Users/john/alibaba/s3stick/bridge/hooks/qoder_hook.py"}]}],
+       "PermissionRequest": [{"matcher": "*", "hooks": [{"type": "command", "command": "python3 /Users/john/alibaba/s3stick/bridge/hooks/qoder_hook.py", "timeout": 60}]}]
+     }
+   }
+   ```
+
+3. **StatusLine** (optional): add to `~/.qoder/settings.json`:
+   ```json
+   {
+     "ui": {
+       "statusLine": {
+         "type": "command",
+         "command": "python3 /Users/john/alibaba/s3stick/bridge/qoder_statusline.py",
+         "refreshInterval": 3000
+       }
+     }
+   }
+   ```
+
+4. Open a `qoder` session → the device lights up just like with Claude Code.
+   Both CLIs can run simultaneously; the bridge aggregates all sessions.
+
+## Codex CLI Setup
+The bridge daemon is shared — the same socket accepts Claude, Qoder, and Codex
+events. Session ids are namespaced internally so identical ids from different
+CLIs cannot collide.
+
+1. **Bridge daemon**: same as above.
+
+2. **Hooks**: add to `~/.codex/hooks.json` (merge into existing hooks). After
+   changing hooks, open Codex and run `/hooks` once to review/trust the new
+   command hook.
+   ```json
+   {
+     "hooks": {
+       "SessionStart":      [{"matcher": "startup|resume|clear|compact", "hooks": [{"type": "command", "command": "python3 /Users/john/alibaba/s3stick/bridge/hooks/codex_hook.py", "timeout": 15}]}],
+       "UserPromptSubmit":  [{"hooks": [{"type": "command", "command": "python3 /Users/john/alibaba/s3stick/bridge/hooks/codex_hook.py", "timeout": 15}]}],
+       "PreToolUse":        [{"matcher": "*", "hooks": [{"type": "command", "command": "python3 /Users/john/alibaba/s3stick/bridge/hooks/codex_hook.py", "timeout": 15}]}],
+       "PostToolUse":       [{"matcher": "*", "hooks": [{"type": "command", "command": "python3 /Users/john/alibaba/s3stick/bridge/hooks/codex_hook.py", "timeout": 15}]}],
+       "SubagentStop":      [{"matcher": "*", "hooks": [{"type": "command", "command": "python3 /Users/john/alibaba/s3stick/bridge/hooks/codex_hook.py", "timeout": 15}]}],
+       "Stop":              [{"hooks": [{"type": "command", "command": "python3 /Users/john/alibaba/s3stick/bridge/hooks/codex_hook.py", "timeout": 15}]}],
+       "PermissionRequest": [{"matcher": "*", "hooks": [{"type": "command", "command": "python3 /Users/john/alibaba/s3stick/bridge/hooks/codex_hook.py", "timeout": 60}]}]
+     }
+   }
+   ```
+
+3. **Status line**: Codex does not use an external command-backed statusLine in
+   this repo. Use Codex's built-in `/statusline` picker and enable items such as
+   model, context remaining, token counters, and rate limits. The device gets
+   token/rate-limit data from the hook's local transcript scan.

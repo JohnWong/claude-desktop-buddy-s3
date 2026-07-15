@@ -1,20 +1,31 @@
 #!/usr/bin/env python3
-"""Claude Code hook client → buddy bridge (M2).
+"""Qoder CLI hook client → buddy bridge.
 
 Wired into every status hook (SessionStart, UserPromptSubmit, Stop,
-Notification, SessionEnd). Reads the hook JSON on stdin, maps it to a compact
+Notification, SessionEnd, PreToolUse, PostToolUse, SubagentStop,
+PermissionRequest). Reads the hook JSON on stdin, maps it to a compact
 event, and posts one line to the bridge's Unix socket. Then exits 0.
 
 FAIL-OPEN by design: if the bridge isn't running or the socket is gone, this
-silently no-ops within a short timeout so Claude Code is never blocked or
+silently no-ops within a short timeout so Qoder CLI is never blocked or
 slowed. Uses only the Python stdlib (no bleak) so it runs under system python3.
 
 DATA MINIMIZATION: only the session id, a coarse event, the notification type,
 and the cwd *basename* (project label) ever leave this process. No prompt text,
 tool input, file contents, or transcript is sent.
 
-Usage in settings.json (command):
-    python3 /abs/path/bridge/hooks/buddy_hook.py
+Usage in ~/.qoder/settings.json:
+    "hooks": {
+      "SessionStart": [{"matcher": "*", "hooks": [{"type": "command", "command": "python3 /abs/path/bridge/hooks/qoder_hook.py"}]}],
+      "UserPromptSubmit": [{"matcher": "*", "hooks": [{"type": "command", "command": "python3 /abs/path/bridge/hooks/qoder_hook.py"}]}],
+      "Stop": [{"matcher": "*", "hooks": [{"type": "command", "command": "python3 /abs/path/bridge/hooks/qoder_hook.py"}]}],
+      "Notification": [{"matcher": "*", "hooks": [{"type": "command", "command": "python3 /abs/path/bridge/hooks/qoder_hook.py"}]}],
+      "SessionEnd": [{"matcher": "*", "hooks": [{"type": "command", "command": "python3 /abs/path/bridge/hooks/qoder_hook.py"}]}],
+      "PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "python3 /abs/path/bridge/hooks/qoder_hook.py"}]}],
+      "PostToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "python3 /abs/path/bridge/hooks/qoder_hook.py"}]}],
+      "SubagentStop": [{"matcher": "*", "hooks": [{"type": "command", "command": "python3 /abs/path/bridge/hooks/qoder_hook.py"}]}],
+      "PermissionRequest": [{"matcher": "*", "hooks": [{"type": "command", "command": "python3 /abs/path/bridge/hooks/qoder_hook.py", "timeout": 60}]}]
+    }
 """
 import json
 import os
@@ -28,10 +39,7 @@ SOCK_PATH = os.path.expanduser("~/.claude-buddy/bridge.sock")
 
 
 def current_tty() -> str:
-    """The session's controlling TTY ('/dev/ttysNNN'), or '' if none. The hook's
-    own fds are pipes, so walk the parent chain to the shell/claude process that
-    owns the terminal. Used only as a stable per-session key for Ghostty tab
-    ordering — nothing sensitive leaves the host. Cheap (one `ps`), best-effort."""
+    """The session's controlling TTY ('/dev/ttysNNN'), or '' if none."""
     try:
         out = subprocess.run(["ps", "-Ao", "pid=,ppid=,tty="],
                              capture_output=True, text=True, timeout=1.0).stdout
@@ -52,12 +60,12 @@ def current_tty() -> str:
             break
     return ""
 
-# Wait at most this long for a device decision before falling back to the native
-# interactive prompt. Must be < the hook's timeout in settings.json.
+
 PERMISSION_WAIT = 40.0
 
 
 def post(obj: dict):
+    obj["src"] = "qoder"
     try:
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         s.settimeout(0.4)
@@ -65,13 +73,11 @@ def post(obj: dict):
         s.sendall((json.dumps(obj) + "\n").encode())
         s.close()
     except Exception:
-        pass  # fail-open: bridge down → no-op
+        pass
 
 
 def last_assistant_is_question(path: str) -> bool:
-    """Heuristic: does the final assistant message end with a question? Reads the
-    transcript locally to decide but returns only a bool — NO message content
-    leaves this process (keeps the privacy guarantee above)."""
+    """Heuristic: does the final assistant message end with a question?"""
     if not path or not os.path.exists(path):
         return False
     last_text = ""
@@ -99,18 +105,16 @@ def last_assistant_is_question(path: str) -> bool:
         return False
     if not last_text:
         return False
-    tail = last_text[-160:].rstrip().rstrip('”"\'）)】」』』 ')
+    tail = last_text[-160:].rstrip().rstrip('""\'）)】」』』 ')
     if tail.endswith("?") or tail.endswith("？"):
         return True
-    # Chinese interrogatives near the very end without an explicit question mark.
     return bool(re.search(
         r"(吗|呢|还是|哪个|哪一个|是否|要不要|好吗|可以吗|对吧|如何|怎么样)"
         r"[。.!！…]?\s*$", tail))
 
 
 def count_output_tokens(path: str) -> int:
-    """Sum assistant output tokens from the transcript JSONL. Reads only the
-    numeric `usage`, never message content — privacy-preserving."""
+    """Sum assistant output tokens from the transcript JSONL."""
     if not path or not os.path.exists(path):
         return 0
     total = 0
@@ -129,11 +133,7 @@ def count_output_tokens(path: str) -> int:
 
 
 def handle_ask(data: dict, tty: str = "", term: str = ""):
-    """AskUserQuestion: do NOT answer on the device and do NOT block the CLI.
-    Picking multiple-choice on the StickS3 proved too fiddly, so we just fire a
-    one-way heads-up to the bridge (which project + what question) and let Claude
-    Code's native terminal picker handle the answer as usual — nothing is printed,
-    so the picker shows immediately and the CLI is never blocked."""
+    """AskUserQuestion: fire a one-way heads-up to the bridge."""
     ti = data.get("tool_input", {}) or {}
     questions = ti.get("questions") or []
     if not questions:
@@ -147,7 +147,7 @@ def handle_ask(data: dict, tty: str = "", term: str = ""):
 
 
 def summarize(tool: str, ti) -> str:
-    """A short, non-sensitive detail for the device (cmd / path / url)."""
+    """A short, non-sensitive detail for the device."""
     if isinstance(ti, dict):
         for k in ("command", "file_path", "path", "url", "pattern", "query"):
             v = ti.get(k)
@@ -157,9 +157,7 @@ def summarize(tool: str, ti) -> str:
 
 
 def request_decision(sid: str, tool: str, hint: str):
-    """Relay a permission prompt to the device and wait for A/B. Returns
-    "allow" | "deny", or None to fall back to the native interactive prompt
-    (device timed out, was unplugged, or the bridge is down)."""
+    """Relay a permission prompt to the device and wait for A/B."""
     pid = f"{(sid or '')[:8]}-{int(time.time() * 1000) % 1000000}"
     try:
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -170,14 +168,14 @@ def request_decision(sid: str, tool: str, hint: str):
         buf = b""
         while b"\n" not in buf:
             chunk = s.recv(256)
-            if not chunk:           # bridge closed w/o a decision → fall back
+            if not chunk:
                 return None
             buf += chunk
         s.close()
         obj = json.loads(buf.split(b"\n", 1)[0].decode())
         return obj.get("decision")
     except Exception:
-        return None                 # timeout / no bridge → native prompt wins
+        return None
 
 
 def main():
@@ -188,10 +186,6 @@ def main():
 
     sid = data.get("session_id", "?")
     event = data.get("hook_event_name", "")
-    # tty + terminal app = the stable per-session key for Ghostty tab ordering.
-    # Attach to EVERY status event so a session's tab is (re)mapped on ANY activity
-    # — not just start/run — so it survives a bridge restart / hook upgrade without
-    # needing a fresh prompt.
     tty = current_tty()
     term = os.environ.get("TERM_PROGRAM", "")
 
@@ -218,43 +212,33 @@ def main():
         if data.get("tool_name") == "AskUserQuestion":
             handle_ask(data, tty, term)
         else:
-            # A tool is STARTING → the session is actively working right now.
-            # This is the only heartbeat allowed to turn the light green: it
-            # re-arms "running" on an async/background RESUME (which carries no
-            # UserPromptSubmit) and keeps the light green through long tool runs.
             post({"evt": "tick", "sid": sid, "tty": tty, "term": term})
         sys.exit(0)
     elif event in ("PostToolUse", "SubagentStop"):
-        # Tool / subagent COMPLETION. Liveness only — refresh `seen` so a
-        # genuinely-working session isn't pruned, but do NOT set "running":
-        # these are completion events and may arrive AFTER the turn already
-        # went idle (e.g. a background subagent finishing post-Stop). Letting
-        # them re-arm running would strand the session green until SESSION_TTL.
         post({"evt": "live", "sid": sid, "tty": tty, "term": term})
         sys.exit(0)
     elif event == "PermissionRequest":
         tool = data.get("tool_name", "")
         if tool == "AskUserQuestion":
-            sys.exit(0)                     # handled by PreToolUse, don't relay
+            sys.exit(0)
         hint = summarize(tool, data.get("tool_input", {}))
-        decision = request_decision(sid, tool, hint)   # allow | always | deny | None
+        decision = request_decision(sid, tool, hint)
         if decision == "deny":
             print(json.dumps({"hookSpecificOutput": {
                 "hookEventName": "PermissionRequest",
-                "decision": {"behavior": "deny"}}}))
+                "behavior": "deny"}}))
         elif decision == "always":
-            # Persist a rule so this tool isn't prompted again (hold-A on device).
             print(json.dumps({"hookSpecificOutput": {
                 "hookEventName": "PermissionRequest",
-                "decision": {"behavior": "allow", "applyRule": tool}}}))
+                "behavior": "allow",
+                "updatedPermissions": [{"tool": tool, "permission": "allow"}]}}))
         elif decision == "allow":
             print(json.dumps({"hookSpecificOutput": {
                 "hookEventName": "PermissionRequest",
-                "decision": {"behavior": "allow"}}}))
-        # else None: no stdout → Claude Code falls back to the native prompt
+                "behavior": "allow"}}))
         sys.exit(0)
 
-    sys.exit(0)  # never block Claude Code
+    sys.exit(0)
 
 
 if __name__ == "__main__":

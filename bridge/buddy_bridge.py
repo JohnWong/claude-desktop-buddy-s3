@@ -19,8 +19,10 @@ Design notes (borrowed from srokaw/terminal-claude-code-buddy-m5stack):
 Run:  ~/.pio-venv/bin/python bridge/buddy_bridge.py
 """
 import asyncio
+import glob
 import json
 import os
+import re
 import subprocess
 import time
 
@@ -38,9 +40,15 @@ SOCK_PATH = os.path.join(SOCK_DIR, "bridge.sock")
 
 PUSH_PERIOD   = 2.5     # seconds between device frames (< 30s staleness window)
 SESSION_TTL   = 3600    # drop sessions with no events for this long (safety)
+CODEX_WATCH_PERIOD = 3.0
+CODEX_WATCH_ACTIVE_TTL = 600
+CODEX_WATCH_ENABLED = False
+CODEX_SESSIONS_GLOB = os.path.expanduser("~/.codex/sessions/**/*.jsonl")
+CODEX_HOOK_SUPPRESS_WATCH = 30.0
 
 # session_id -> {"state": "idle"|"running"|"waiting", "label": str, "seen": ts}
 SESSIONS: dict[str, dict] = {}
+CLIENT_SOURCES = {"claude", "qoder", "codex"}
 
 # Fixed display slots for the 3-light strip. A session keeps its slot (stable
 # position) while shown, but is evicted when a more-active session pushes it out
@@ -168,6 +176,33 @@ def ledger_add(sid: str, cumulative: int):
     ledger_save()
 
 
+def _looks_like_question(text: str) -> bool:
+    tail = (text or "").strip()[-160:].rstrip().rstrip('""\'）)】」』』 ')
+    if not tail:
+        return False
+    if tail.endswith("?") or tail.endswith("？"):
+        return True
+    return bool(re.search(
+        r"(吗|呢|还是|哪个|哪一个|是否|要不要|好吗|可以吗|对吧|如何|怎么样)"
+        r"[。.!！…]?\s*$", tail))
+
+
+def _codex_text_from_payload(pl: dict) -> str:
+    msg = pl.get("message")
+    if isinstance(msg, str):
+        return msg
+    content = pl.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        out = []
+        for b in content:
+            if isinstance(b, dict) and b.get("type") in ("text", "output_text"):
+                out.append(str(b.get("text") or ""))
+        return "\n".join(out)
+    return ""
+
+
 def tokens_today() -> int:
     return LEDGER.get(_today(), 0)
 
@@ -185,6 +220,7 @@ USAGE: dict = {}
 #   completed → confetti celebrate (a turn just finished)
 #   nudge     → gentle "awaiting your input" amber chime (idle_prompt)
 ONESHOT: dict[str, bool] = {}
+CODEX_HOOK_ACTIVE_UNTIL = 0.0
 
 
 def now() -> float:
@@ -247,11 +283,20 @@ def prune():
 
 def apply_event(ev: dict):
     """Update the session registry from a hook event."""
-    sid = ev.get("sid") or "?"
+    global CODEX_HOOK_ACTIVE_UNTIL
     evt = ev.get("evt")
     if evt == "usage":
         USAGE.update({k: ev.get(k) for k in ("s5", "s5_reset", "w7", "w7_reset")})
         return
+    src = ev.get("src") or "claude"
+    if src not in CLIENT_SOURCES:
+        return
+    sid = f"{src}:{ev.get('sid') or '?'}"
+    if src == "codex":
+        CODEX_HOOK_ACTIVE_UNTIL = now() + CODEX_HOOK_SUPPRESS_WATCH
+        for old_sid, old in list(SESSIONS.items()):
+            if old_sid.startswith("codex:") and old_sid != sid and not old.get("tty"):
+                SESSIONS.pop(old_sid, None)
     if evt == "end":
         SESSIONS.pop(sid, None)
         SESSION_TOKENS.pop(sid, None)
@@ -276,21 +321,31 @@ def apply_event(ev: dict):
         s["asking"] = False              # you replied → clear any pending question
         s["question"] = False            # and any pending AskUserQuestion heads-up
     elif evt == "tick":
-        # Tool activity (PreToolUse/PostToolUse/SubagentStop). Treated like a turn
-        # restart: the session is actively working RIGHT NOW. This is what makes
-        # the light go green again after an async/background resume — those resumes
-        # carry no UserPromptSubmit, so without this the session would be stuck
-        # showing idle through all the resumed work. Also keeps long subagent /
-        # background runs green instead of letting `seen` go stale.
+        # A tool is STARTING (PreToolUse). Treated like a turn restart: the session
+        # is actively working RIGHT NOW. This is what re-greens the light after an
+        # async/background resume — those resumes carry no UserPromptSubmit, so
+        # without this the session would be stuck idle through all the resumed work.
+        # NOTE: only tool-START re-arms running. Completion events (PostToolUse/
+        # SubagentStop) come in as "live" below and must NOT resurrect an idle
+        # session, or a trailing background-subagent completion strands it green.
         s["state"] = "running"
         s["awaiting"] = False
         s["asking"] = False
         s["question"] = False
+    elif evt == "live":
+        # Tool/subagent COMPLETION heartbeat. `touch()` above already refreshed
+        # `seen`, which is the whole point: keep a working session alive so it
+        # isn't pruned. Deliberately leaves `state` untouched — during a turn it's
+        # already "running" (sticky from the tick); after a turn it's "idle" and
+        # must stay idle.
+        pass
     elif evt == "idle":
         s["state"] = "idle"              # turn ended (border waits for idle_prompt)
         s["asking"] = bool(ev.get("asking"))  # heuristic: turn ended on a question
         s["question"] = False            # answered in the terminal by now
         ONESHOT["completed"] = True      # brief celebrate, like the desktop app
+        if s["asking"]:
+            ONESHOT["nudge"] = True      # red "needs you" inferred from final question
     elif evt == "asknote":
         # AskUserQuestion fired: NOT answered on the device anymore — just a heads-up.
         # Mark the session so its light goes red and the status line shows which
@@ -421,6 +476,137 @@ def aggregate() -> dict:
     return frame
 
 
+def _codex_recent_files(limit: int = 6) -> list[str]:
+    try:
+        files = glob.glob(CODEX_SESSIONS_GLOB, recursive=True)
+        files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+        return files[:limit]
+    except Exception:
+        return []
+
+
+def _codex_scan_file(path: str) -> dict | None:
+    try:
+        mtime = os.path.getmtime(path)
+    except Exception:
+        return None
+    if time.time() - mtime > CODEX_WATCH_ACTIVE_TTL:
+        return None
+
+    sid = os.path.splitext(os.path.basename(path))[0]
+    cwd = ""
+    last_kind = ""
+    last_assistant = ""
+    pending_calls: set[str] = set()
+    tokens = None
+    usage: dict = {}
+    try:
+        with open(path, "r") as f:
+            for line in f:
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+                typ = obj.get("type")
+                pl = obj.get("payload") or {}
+                if typ == "session_meta" and isinstance(pl, dict):
+                    sid = str(pl.get("id") or sid)
+                    cwd = pl.get("cwd") or cwd
+                    continue
+                if typ == "turn_context" and isinstance(pl, dict):
+                    cwd = pl.get("cwd") or cwd
+                    continue
+                if not isinstance(pl, dict):
+                    continue
+                kind = pl.get("type") or typ or ""
+                last_kind = str(kind)
+
+                if typ == "response_item" and kind == "function_call":
+                    cid = pl.get("call_id")
+                    if cid:
+                        pending_calls.add(str(cid))
+                elif typ == "response_item" and kind == "function_call_output":
+                    cid = pl.get("call_id")
+                    if cid:
+                        pending_calls.discard(str(cid))
+
+                if (typ == "response_item" and kind == "message" and pl.get("role") == "assistant") \
+                        or (typ == "event_msg" and kind == "agent_message"):
+                    txt = _codex_text_from_payload(pl)
+                    if txt.strip():
+                        last_assistant = txt
+
+                if typ == "event_msg" and kind == "token_count":
+                    tu = ((pl.get("info") or {}).get("total_token_usage") or {})
+                    try:
+                        tokens = int(tu.get("output_tokens") or 0)
+                    except (TypeError, ValueError):
+                        pass
+                    rl = pl.get("rate_limits") or {}
+                    for bucket in ("primary", "secondary"):
+                        b = rl.get(bucket) or {}
+                        pct = b.get("used_percent")
+                        reset = b.get("resets_at")
+                        if pct is None:
+                            continue
+                        try:
+                            mins = int(b.get("window_minutes") or 0)
+                        except (TypeError, ValueError):
+                            mins = 0
+                        if mins == 300:
+                            usage.update({"s5": pct, "s5_reset": reset})
+                        elif mins == 10080:
+                            usage.update({"w7": pct, "w7_reset": reset})
+    except Exception:
+        return None
+
+    age = time.time() - mtime
+    idle_kinds = {"task_complete", "token_count"}
+    running = bool(pending_calls) or (age < 15 and last_kind not in idle_kinds)
+    return {"sid": sid, "cwd": cwd, "state": "running" if running else "idle",
+            "asking": (not running and _looks_like_question(last_assistant)),
+            "tokens": tokens, "usage": usage, "mtime": mtime}
+
+
+def codex_watch_once():
+    if not CODEX_WATCH_ENABLED or now() < CODEX_HOOK_ACTIVE_UNTIL:
+        return
+    changed = False
+    for path in _codex_recent_files():
+        info = _codex_scan_file(path)
+        if not info:
+            continue
+        sid = f"codex:{info['sid']}"
+        s = touch(sid)
+        if info.get("cwd"):
+            s["label"] = os.path.basename(info["cwd"])
+        s["state"] = info["state"]
+        s["asking"] = bool(info["asking"])
+        s["question"] = False
+        if info.get("tokens") is not None:
+            SESSION_TOKENS[sid] = int(info["tokens"])
+            ledger_add(sid, int(info["tokens"]))
+        if info.get("usage"):
+            USAGE.update(info["usage"])
+        changed = True
+    if changed:
+        sessions_save()
+
+
+async def codex_watch_loop():
+    last = 0
+    while True:
+        try:
+            codex_watch_once()
+            n = sum(1 for sid in SESSIONS if sid.startswith("codex:"))
+            if n != last:
+                print(f"[codex-watch] sessions={n}", flush=True)
+                last = n
+        except Exception as e:
+            print(f"[codex-watch] error: {e!r}", flush=True)
+        await asyncio.sleep(CODEX_WATCH_PERIOD)
+
+
 # ── Socket server (hooks → bridge) ───────────────────────────────────────────
 async def handle_conn(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
     owned: set[str] = set()   # prompt ids this connection is waiting on
@@ -433,11 +619,14 @@ async def handle_conn(reader: asyncio.StreamReader, writer: asyncio.StreamWriter
                 ev = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            src = ev.get("src") or "claude"
+            if src not in CLIENT_SOURCES and ev.get("evt") != "usage":
+                continue
             if ev.get("evt") == "prompt":
                 pid = str(ev.get("id") or "")
                 if pid:
                     PENDING[pid] = {"writer": writer,
-                                    "sid": str(ev.get("sid") or ""),
+                                    "sid": f"{src}:{ev.get('sid') or ''}",
                                     "tool": str(ev.get("tool", ""))[:18],
                                     "hint": str(ev.get("hint", ""))[:42]}
                     owned.add(pid)
@@ -570,7 +759,7 @@ def _restart(reason: str):
 async def ble_loop():
     global _CURRENT_BLE_CLIENT, _EVENT_LOOP
     _EVENT_LOOP = asyncio.get_running_loop()
-    quick_fail = 0   # consecutive connections that dropped almost immediately
+    quick_fail = 0   # consecutive short-lived links
     notfound = 0     # consecutive scans that found nothing
     while True:
         try:
@@ -626,8 +815,11 @@ async def ble_loop():
                 ts = (json.dumps({"time": [int(time.time()), tzoff]}) + "\n").encode()
                 try:
                     await client.write_gatt_char(NUS_RX, ts, response=True)
+                    print("[ble] time sync ok", flush=True)
                 except Exception:
                     pass
+                tx_count = 0
+                last_tx_log = 0.0
                 while client.is_connected:
                     frame = aggregate()
                     if ONESHOT:                       # merge + clear one-shots
@@ -636,6 +828,11 @@ async def ble_loop():
                     line = (json.dumps(frame) + "\n").encode()
                     try:
                         await client.write_gatt_char(NUS_RX, line, response=True)
+                        tx_count += 1
+                        if time.monotonic() - last_tx_log > 30:
+                            last_tx_log = time.monotonic()
+                            print(f"[ble] tx ok frames={tx_count} bytes={len(line)}",
+                                  flush=True)
                     except Exception as e:
                         print(f"[ble] write failed ({e})", flush=True)
                         break
@@ -646,14 +843,17 @@ async def ble_loop():
                     await client.disconnect()
                 except Exception:
                     pass
-            # Link ended. Reconnect IN-PROCESS — restarting doesn't fix a flaky link
-            # and just thrashes launchd (we saw 70 restarts). Back off if it dropped
-            # almost immediately so we don't tight-loop connect/drop.
+            # Link ended. macOS/CoreBluetooth can get stuck in a half-good state:
+            # connect succeeds, writes appear to work for a short window, then the
+            # device stops updating or the link drops. A few in-process retries are
+            # fine; repeated short links need a fresh process/central.
             dur = time.monotonic() - t0
-            if dur < 8:
+            if dur < 120:
                 quick_fail += 1
                 backoff = min(30.0, 2.0 ** quick_fail)
-                print(f"[ble] link dropped after {dur:.1f}s (x{quick_fail}); retry in {backoff:.0f}s", flush=True)
+                print(f"[ble] short link dropped after {dur:.1f}s (x{quick_fail}); retry in {backoff:.0f}s", flush=True)
+                if quick_fail >= 3:
+                    _restart("repeated short BLE links")
                 await asyncio.sleep(backoff)
             else:
                 quick_fail = 0
@@ -691,7 +891,7 @@ async def main():
     ledger_load()
     sessions_load()                      # restore live sessions across restarts
     print(f"[bridge] restored {len(SESSIONS)} session(s) from snapshot")
-    await asyncio.gather(socket_server(), ble_loop(), ghostty_map_loop())
+    await asyncio.gather(socket_server(), ble_loop(), ghostty_map_loop(), codex_watch_loop())
 
 
 if __name__ == "__main__":

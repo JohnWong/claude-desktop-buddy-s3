@@ -30,6 +30,24 @@ def post(obj):
         pass  # fail-open: bridge down → just print the status line
 
 
+def is_default_oauth():
+    """True only for a vanilla Claude.ai OAuth session (Pro/Max).
+
+    The device's usage gauge is meant to show the device owner's real Anthropic
+    5h/7d quota. A session pointed at a relay/gateway (ANTHROPIC_BASE_URL away
+    from api.anthropic.com) or authed with a token/API key reports a DIFFERENT
+    identity whose rate_limits aren't that quota — and since the statusLine keeps
+    firing on the TUI refresh timer even when the session is idle, such a session
+    would otherwise clobber the device's gauge indefinitely. Gate those out: only
+    the default OAuth identity may push usage."""
+    if os.environ.get("ANTHROPIC_AUTH_TOKEN") or os.environ.get("ANTHROPIC_API_KEY"):
+        return False
+    base = (os.environ.get("ANTHROPIC_BASE_URL") or "").strip()
+    if base and "api.anthropic.com" not in base:
+        return False
+    return True
+
+
 def main():
     try:
         d = json.load(sys.stdin)
@@ -42,7 +60,7 @@ def main():
     s5p = s5.get("used_percentage")
     w7p = w7.get("used_percentage")
 
-    if s5p is not None or w7p is not None:
+    if (s5p is not None or w7p is not None) and is_default_oauth():
         post({"evt": "usage",
               "s5": s5p, "s5_reset": s5.get("resets_at"),
               "w7": w7p, "w7_reset": w7.get("resets_at")})
